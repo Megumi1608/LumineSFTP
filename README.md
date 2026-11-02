@@ -21,7 +21,7 @@ SFTP client desktop tối giản cho **Windows** và **macOS**, có nhập cấu
 Yêu cầu: **Node.js 22.12+**, npm.
 
 ```bash
-npm ci
+npm install
 npm run dev          # chạy ở chế độ phát triển
 npm run typecheck    # kiểm tra TypeScript
 npm test             # unit tests
