@@ -1,0 +1,64 @@
+appId: com.lumine.sftp
+productName: Lumine SFTP
+copyright: Copyright © 2026 Lumine
+
+directories:
+  buildResources: build
+  output: release
+
+files:
+  - out/**/*
+  - package.json
+  - '!**/*.map'
+
+asar: true
+npmRebuild: false
+
+electronFuses:
+  runAsNode: false
+  enableCookieEncryption: true
+  enableNodeOptionsEnvironmentVariable: false
+  enableNodeCliInspectArguments: false
+  enableEmbeddedAsarIntegrityValidation: false
+  onlyLoadAppFromAsar: true
+
+publish:
+  provider: github
+  owner: Megumi1608
+  repo: LumineSFTP
+  releaseType: draft
+
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+  icon: build/icon.png
+  artifactName: ${productName}-${version}-win-${arch}.${ext}
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  deleteAppDataOnUninstall: false
+
+mac:
+  target:
+    - target: dmg
+      arch:
+        - universal
+    - target: zip
+      arch:
+        - universal
+  icon: build/icon.png
+  category: public.app-category.utilities
+  hardenedRuntime: true
+  gatekeeperAssess: false
+  identity: null
+  artifactName: ${productName}-${version}-mac-${arch}.${ext}
+
+dmg:
+  title: ${productName} ${version}
+  artifactName: ${productName}-${version}-mac-${arch}.${ext}
