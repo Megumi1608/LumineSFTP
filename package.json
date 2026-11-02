@@ -26,9 +26,7 @@
     "test:watch": "vitest",
     "test:integration": "vitest run tests/sftp.integration.test.ts",
     "package:win": "npm run build && electron-builder --win",
-    "package:mac": "npm run build && electron-builder --mac",
-    "release:win": "npm run build && electron-builder --win --publish always",
-    "release:mac": "npm run build && electron-builder --mac --publish always"
+    "package:mac": "npm run build && electron-builder --mac"
   },
   "dependencies": {
     "electron-updater": "6.8.11",

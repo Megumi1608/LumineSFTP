@@ -1,7 +1,7 @@
 # Lumine SFTP — Kế hoạch triển khai
 
 > SFTP client desktop tối giản cho Windows & macOS, nhập cấu hình kết nối bằng mã QR.
-> Trạng thái: **Đã triển khai v0.1.0** — UI mono trắng–đen; thêm auto-update qua GitHub Releases và CI build/release.
+> Trạng thái: **Đã triển khai v0.1.0** — UI mono trắng–đen; auto-update qua GitHub Releases. Build và upload thủ công, không dùng CI.
 
 ---
 
@@ -116,7 +116,7 @@ LumineSFTP/
 ├─ docs/
 │  ├─ SECURITY.md               # threat model + checklist
 │  └─ QR-FORMAT.md              # đặc tả payload
-└─ .github/workflows/build.yml  # matrix Windows + macOS
+└─ docs/                         # SECURITY.md, QR-FORMAT.md
 ```
 
 ---
@@ -257,7 +257,7 @@ Ghi file an toàn:
 | Malicious filename (traversal, reserved, rất dài, ANSI) | Sanitize + giới hạn + render dạng text (React escape) |
 | Renderer RCE từ nội dung remote | `contextIsolation`, `sandbox`, `nodeIntegration:false`, CSP chặt, không remote content |
 | IPC bị lạm dụng | Allowlist channel, validate sender + schema, không nhận object tuỳ ý |
-| Dependency supply chain | Pin exact, lockfile, `npm ci`, `npm audit` |
+| Dependency supply chain | Pin exact, lockfile, `npm install`, `npm audit` |
 | App bị chạy như Node | Electron fuses: tắt `RunAsNode`, `NODE_OPTIONS`, inspect args |
 | Clickjacking/navigation | Chặn `will-navigate`, `setWindowOpenHandler` deny, không webview |
 | Quyền hệ thống thừa | Từ chối mọi permission request (camera/mic/geo/notification) |
@@ -339,13 +339,13 @@ Chưa có chứng chỉ ký số:
 - Windows: SmartScreen sẽ cảnh báo → hướng dẫn “More info → Run anyway”.
 - macOS: Gatekeeper chặn app tải từ mạng → hướng dẫn
   `xattr -dr com.apple.quarantine "/Applications/Lumine SFTP.app"`.
-- Nếu bạn có Apple Developer ID / chứng chỉ Windows, thêm secrets vào CI để ký + notarize.
+- Nếu bạn có Apple Developer ID / chứng chỉ Windows, cấu hình khi build để ký + notarize.
 
-CI `.github/workflows/build.yml`:
+Build & phát hành thủ công (không CI):
 
-- Matrix `windows-latest`, `macos-latest`: `npm ci` → typecheck → test → build.
-- Upload artifact installer.
-- Build macOS **phải** chạy trên runner macOS (không cross-build DMG từ Windows).
+- Windows: `npm run package:win`, tạo release và upload `.exe`, `.blockmap`, `latest.yml`.
+- macOS: chạy `npm run package:mac` **trên máy macOS**, upload `.dmg`, `.zip`, `latest-mac.yml`.
+- Release phải published thì auto-update mới thấy.
 
 ---
 
@@ -385,12 +385,12 @@ CI `.github/workflows/build.yml`:
 
 | Phase | Nội dung | Tiêu chí xong |
 |---|---|---|
-| **0. Scaffold** | `electron-vite` + TS + React; ESLint/Prettier; cấu hình build; CI skeleton | `npm run dev` mở cửa sổ trống, typecheck pass |
+| **0. Scaffold** | `electron-vite` + TS + React; ESLint/Prettier; cấu hình build | `npm run dev` mở cửa sổ trống, typecheck pass |
 | **1. Security shell** | BrowserWindow hardening, CSP, permission handler, preload API, IPC contract, store JSON, logging redact | Unit test contract/store pass; kiểm tra không có Node trong renderer |
 | **2. SSH/SFTP engine** | `SshSession`, hostVerifier TOFU, known_hosts, auth password + keyboard-interactive, list/mkdir/rename/delete, transfer queue 2 luồng, temp + rename, cancel | Test Docker pass; mismatch bị chặn |
 | **3. UI** | Profile list, connect dialog, host key dialog, file browser, transfers, settings, i18n vi/en | Duyệt + upload/download được trên Windows |
 | **4. QR** | `qr.ts` parser + validators, decode ảnh/clipboard, preview/confirm | Payload mẫu hoạt động; secret bị từ chối |
-| **5. Đóng gói & docs** | electron-builder NSIS + DMG universal, CI matrix, README, SECURITY.md, QR-FORMAT.md | Cài được trên Win; DMG build trên macOS CI; test matrix xanh |
+| **5. Đóng gói & docs** | electron-builder NSIS + DMG universal, README, SECURITY.md, QR-FORMAT.md | Cài được trên Win; DMG build trên macOS; test pass |
 | **6. QA** | Test với server thật, Unicode, file lớn, huỷ, host key đổi | Checklist QA ký nhận |
 
 Ước lượng: ~5–6 ngày người; khi làm liên tục trong phiên có thể xong Phase 0–4
@@ -406,7 +406,7 @@ trước, Phase 5–6 cần build/QA thực tế.
 - [ ] Lần đầu hiện fingerprint ed25519; lần sau tự động; đổi key → chặn.
 - [ ] Upload/download/mkdir/rename/delete hoạt động; file tên xấu không thoát thư mục đích.
 - [ ] Không có mật khẩu trong file/log/telemetry.
-- [ ] `npm ci && npm test && npm run build` xanh trên Windows; CI macOS build DMG.
+- [ ] `npm install && npm test && npm run build` xanh trên Windows; macOS build DMG trên máy Mac.
 - [ ] App chạy được trên Windows 11 và macOS (arm64).
 
 ---
@@ -415,7 +415,7 @@ trước, Phase 5–6 cần build/QA thực tế.
 
 | Rủi ro | Xử lý |
 |---|---|
-| macOS không build/test được trên máy Windows | CI `macos-latest`; bạn chạy thử DMG trên MacBook |
+| macOS không build/test được trên máy Windows | Build trên MacBook bằng `npm run package:mac`; không cross-build DMG |
 | App unsigned bị Gatekeeper/SmartScreen chặn | Hướng dẫn trong README; ký nếu có chứng chỉ |
 | Server dùng thuật toán cũ (`ssh-rsa` SHA-1) | `ssh2` mặc định hiện đại; nếu lỗi, ghi nhận và chỉ bật tối thiểu, có cảnh báo |
 | Electron ~100 MB | Chấp nhận; Tauri là phương án khác nếu cần siêu nhẹ (không chọn) |

@@ -27,7 +27,7 @@ publish:
   provider: github
   owner: Megumi1608
   repo: LumineSFTP
-  releaseType: draft
+  releaseType: release
 
 win:
   target:
@@ -35,7 +35,7 @@ win:
       arch:
         - x64
   icon: build/icon.png
-  artifactName: ${productName}-${version}-win-${arch}.${ext}
+  artifactName: Lumine-SFTP-${version}-win-${arch}.${ext}
 
 nsis:
   oneClick: false
@@ -58,8 +58,8 @@ mac:
   hardenedRuntime: true
   gatekeeperAssess: false
   identity: null
-  artifactName: ${productName}-${version}-mac-${arch}.${ext}
+  artifactName: Lumine-SFTP-${version}-mac-${arch}.${ext}
 
 dmg:
   title: ${productName} ${version}
-  artifactName: ${productName}-${version}-mac-${arch}.${ext}
+  artifactName: Lumine-SFTP-${version}-mac-${arch}.${ext}

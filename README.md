@@ -1,6 +1,5 @@
 # Lumine SFTP
 
-[![build](https://github.com/Megumi1608/LumineSFTP/actions/workflows/build.yml/badge.svg)](https://github.com/Megumi1608/LumineSFTP/actions/workflows/build.yml)
 [![release](https://img.shields.io/github/v/release/Megumi1608/LumineSFTP)](https://github.com/Megumi1608/LumineSFTP/releases/latest)
 
 SFTP client desktop tối giản cho **Windows** và **macOS**, có nhập cấu hình kết nối bằng **mã QR**.
@@ -32,15 +31,15 @@ npm start            # chạy bản đã build
 ### Đóng gói
 
 ```bash
-npm run package:win   # Windows: release/Lumine SFTP-<version>-win-x64.exe (NSIS)
-npm run package:mac   # macOS: release/Lumine SFTP-<version>-mac-universal.dmg (chạy trên macOS)
+npm run package:win   # Windows: release/Lumine-SFTP-<version>-win-x64.exe (NSIS)
+npm run package:mac   # macOS: release/Lumine-SFTP-<version>-mac-universal.dmg (chạy trên macOS)
 ```
 
-- Bản macOS **phải build trên macOS** (hoặc GitHub Actions `macos-latest`).
+- Bản macOS **phải build trên macOS**. Repo không dùng CI; build và upload thủ công.
 - Bản build mặc định **chưa ký số**:
   - Windows SmartScreen: *More info → Run anyway*.
   - macOS Gatekeeper: `xattr -dr com.apple.quarantine "/Applications/Lumine SFTP.app"`.
-- Muốn ký/notarize: cấu hình chứng chỉ trong CI (Apple Developer ID / Windows code signing). Không bắt buộc để dùng cá nhân.
+- Muốn ký/notarize: cấu hình chứng chỉ khi build (Apple Developer ID / Windows code signing). Không bắt buộc để dùng cá nhân.
 
 ## Nhập từ QR
 
@@ -84,24 +83,29 @@ Tóm tắt (chi tiết: [`docs/SECURITY.md`](docs/SECURITY.md)):
 - **macOS**: bản build hiện tại **chưa ký số**, nên không thể tự cài cập nhật. App vẫn kiểm tra và mở trang GitHub Releases để tải DMG thủ công. Muốn auto-update trên macOS cần Apple Developer ID + notarization.
 - Bản build chưa ký có thể bị SmartScreen/Gatekeeper cảnh báo.
 
-### Phát hành bản mới
+### Phát hành bản mới (thủ công)
 
 1. Tăng version trong `package.json` (ví dụ `0.1.1`).
-2. Commit và tag:
+2. Chạy test và build installer:
    ```bash
-   git tag v0.1.1
-   git push origin main --tags
+   npm install
+   npm test
+   npm run package:win     # trên Windows
+   npm run package:mac     # trên macOS
    ```
-3. GitHub Actions sẽ:
-   - chạy typecheck + unit test + build trên Windows và macOS;
-   - build NSIS (Windows) và DMG + ZIP (macOS universal);
-   - upload asset + `latest.yml` / `latest-mac.yml` vào **draft release**;
-   - publish release khi cả hai nền tảng thành công.
-4. Kiểm tra tại [Releases](https://github.com/Megumi1608/LumineSFTP/releases).
+3. Tạo release và upload asset (Windows):
+   ```bash
+   gh release create v0.1.1 \
+     --title "Lumine SFTP 0.1.1" \
+     --notes "..." \
+     "release/Lumine-SFTP-0.1.1-win-x64.exe" \
+     "release/Lumine-SFTP-0.1.1-win-x64.exe.blockmap" \
+     "release/latest.yml"
+   ```
+4. Trên macOS, upload thêm `Lumine-SFTP-<version>-mac-universal.dmg`, file `.zip` và `latest-mac.yml`.
+5. Release phải ở trạng thái **published** thì auto-update mới thấy.
 
-Release phải là bản **published** (không phải draft) thì auto-update mới thấy. Workflow tự publish sau khi cả Windows lẫn macOS build xong.
-
-Nếu muốn ký số, thêm secrets/chứng chỉ vào CI (`CSC_LINK`, `CSC_KEY_PASSWORD`, Apple notarization). Khi macOS đã ký, đổi `canAutoUpdate` trong `src/main/updater.ts` để bật auto-install trên macOS.
+Nếu muốn ký số: cấu hình chứng chỉ trên máy build (`CSC_LINK`, `CSC_KEY_PASSWORD`, Apple notarization). Khi macOS đã ký, đổi `canAutoUpdate` trong `src/main/updater.ts` để bật auto-install trên macOS.
 
 ## Dữ liệu lưu ở đâu
 
