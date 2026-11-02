@@ -10,6 +10,7 @@ files:
   - out/**/*
   - package.json
   - '!**/*.map'
+  - '!node_modules/@rolldown/**'
 
 asar: true
 npmRebuild: false
