@@ -8,10 +8,12 @@ export type ErrorCode =
   | 'DIALOG_CANCELLED'
   | 'AUTH_FAILED'
   | 'AUTH_CANCELLED'
+  | 'SECRET_REQUIRED'
   | 'CONNECTION_REFUSED'
   | 'HOST_NOT_FOUND'
   | 'CONNECTION_TIMEOUT'
   | 'NETWORK_ERROR'
+  | 'ALGORITHM_UNSUPPORTED'
   | 'HOST_KEY_MISMATCH'
   | 'HOST_KEY_REJECTED'
   | 'HOST_KEY_TIMEOUT'
@@ -33,12 +35,17 @@ export type Ok<T> = { ok: true; data: T }
 export type Err = { ok: false; code: ErrorCode; detail?: string }
 export type Result<T> = Ok<T> | Err
 
+export type AuthMethod = 'password' | 'key'
+
 export interface Profile {
   id: string
   name: string
   host: string
   port: number
   username: string
+  authMethod: AuthMethod
+  keyPath: string | null
+  hasSavedPassword?: boolean
   createdAt: number
   lastUsedAt: number | null
 }
@@ -48,6 +55,14 @@ export interface ProfileInput {
   host: string
   port: number
   username: string
+  authMethod: AuthMethod
+  keyPath: string | null
+}
+
+export interface ConnectSecret {
+  password?: string
+  passphrase?: string
+  saveSecret?: boolean
 }
 
 export interface QrPayload {
@@ -83,6 +98,15 @@ export interface HostKeyPrompt {
   fingerprint: string
 }
 
+export interface HostKeyMismatchPrompt {
+  host: string
+  port: number
+  keyType: string
+  expectedKeyType: string
+  expectedFingerprint: string
+  receivedFingerprint: string
+}
+
 export interface InteractivePromptLine {
   prompt: string
   echo: boolean
@@ -102,6 +126,9 @@ export interface RemoteEntry {
   kind: RemoteEntryKind
   size: number
   modified: number
+  mode: number
+  uid: number
+  gid: number
 }
 
 export interface RemoteListing {
@@ -111,6 +138,8 @@ export interface RemoteListing {
 
 export type TransferDirection = 'upload' | 'download'
 export type TransferState = 'queued' | 'running' | 'done' | 'error' | 'cancelled'
+export type ConflictAction = 'overwrite' | 'skip' | 'rename'
+export type ConflictMode = 'error' | ConflictAction
 
 export interface TransferInfo {
   id: string
@@ -120,6 +149,9 @@ export interface TransferInfo {
   total: number
   state: TransferState
   code?: ErrorCode
+  speed?: number
+  eta?: number
+  canRetry?: boolean
 }
 
 export interface KnownHost {
@@ -131,9 +163,29 @@ export interface KnownHost {
   firstSeen: number
 }
 
+export interface Bookmark {
+  id: string
+  profileId: string
+  path: string
+  name: string
+  createdAt: number
+}
+
+export interface WindowState {
+  width: number
+  height: number
+  x?: number
+  y?: number
+  maximized: boolean
+}
+
+export type KnownHostsHealth = 'ok' | 'partial' | 'recovered'
+
 export interface Settings {
   locale: Locale
   version: string
+  knownHostsHealth: KnownHostsHealth
+  secretStorageAvailable: boolean
 }
 
 export type UpdateState =
@@ -159,16 +211,25 @@ export interface LumineApi {
     list(): Promise<Result<Profile[]>>
     save(input: ProfileInput & { id?: string }): Promise<Result<Profile>>
     remove(id: string): Promise<Result<null>>
+    pickKey(): Promise<Result<string | null>>
   }
   settings: {
     get(): Promise<Result<Settings>>
     setLocale(locale: Locale): Promise<Result<Settings>>
   }
+  secrets: {
+    forget(profileId: string): Promise<Result<Profile>>
+  }
   knownHosts: {
     list(): Promise<Result<KnownHost[]>>
     forget(key: string): Promise<Result<null>>
   }
-  connect(profileId: string, password: string): Promise<Result<Profile>>
+  bookmarks: {
+    list(profileId: string): Promise<Result<Bookmark[]>>
+    add(profileId: string, path: string): Promise<Result<Bookmark>>
+    remove(id: string): Promise<Result<null>>
+  }
+  connect(profileId: string, secret: ConnectSecret): Promise<Result<Profile>>
   disconnect(): Promise<Result<null>>
   respondHostKey(requestId: string, accept: boolean): Promise<Result<null>>
   answerInteractive(
@@ -180,10 +241,14 @@ export interface LumineApi {
     list(path: string): Promise<Result<RemoteListing>>
     mkdir(dir: string, name: string): Promise<Result<null>>
     rename(dir: string, from: string, to: string): Promise<Result<null>>
-    remove(path: string): Promise<Result<null>>
+    remove(paths: string[]): Promise<Result<{ queued: number }>>
     upload(dir: string): Promise<Result<{ queued: number }>>
-    download(path: string): Promise<Result<{ queued: number }>>
+    uploadFolder(dir: string): Promise<Result<{ queued: number }>>
+    download(paths: string[]): Promise<Result<{ queued: number }>>
     cancel(id: string): Promise<Result<null>>
+    retry(id: string): Promise<Result<null>>
+    reveal(id: string): Promise<Result<null>>
+    chmod(path: string, mode: number): Promise<Result<null>>
   }
   updates: {
     get(): Promise<Result<UpdateStatus>>
@@ -194,6 +259,7 @@ export interface LumineApi {
   }
   onStatus(callback: (status: ConnectionStatus) => void): () => void
   onHostKey(callback: (prompt: HostKeyPrompt) => void): () => void
+  onHostKeyMismatch(callback: (prompt: HostKeyMismatchPrompt) => void): () => void
   onInteractive(callback: (request: InteractiveRequest) => void): () => void
   onTransfer(callback: (transfer: TransferInfo) => void): () => void
   onUpdate(callback: (status: UpdateStatus) => void): () => void
@@ -203,10 +269,15 @@ export const IPC = {
   profilesList: 'profiles:list',
   profilesSave: 'profiles:save',
   profilesRemove: 'profiles:remove',
+  profilesPickKey: 'profiles:pick-key',
+  secretsForget: 'secrets:forget',
   settingsGet: 'settings:get',
   settingsSetLocale: 'settings:set-locale',
   knownHostsList: 'known-hosts:list',
   knownHostsForget: 'known-hosts:forget',
+  bookmarksList: 'bookmarks:list',
+  bookmarksAdd: 'bookmarks:add',
+  bookmarksRemove: 'bookmarks:remove',
   connect: 'connection:connect',
   disconnect: 'connection:disconnect',
   hostKeyRespond: 'connection:hostkey-respond',
@@ -216,8 +287,12 @@ export const IPC = {
   sftpRename: 'sftp:rename',
   sftpRemove: 'sftp:remove',
   sftpUpload: 'sftp:upload',
+  sftpUploadFolder: 'sftp:upload-folder',
   sftpDownload: 'sftp:download',
   sftpCancel: 'sftp:cancel',
+  sftpRetry: 'sftp:retry',
+  sftpReveal: 'sftp:reveal',
+  sftpChmod: 'sftp:chmod',
   updatesGet: 'updates:get',
   updatesCheck: 'updates:check',
   updatesDownload: 'updates:download',
@@ -225,6 +300,7 @@ export const IPC = {
   updatesOpenRelease: 'updates:open-release',
   eventStatus: 'event:status',
   eventHostKey: 'event:hostkey',
+  eventHostKeyMismatch: 'event:hostkey-mismatch',
   eventInteractive: 'event:interactive',
   eventTransfer: 'event:transfer',
   eventUpdate: 'event:update'

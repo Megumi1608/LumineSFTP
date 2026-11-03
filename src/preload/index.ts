@@ -1,7 +1,9 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import {
   IPC,
+  type ConnectSecret,
   type ConnectionStatus,
+  type HostKeyMismatchPrompt,
   type HostKeyPrompt,
   type InteractiveRequest,
   type LumineApi,
@@ -25,7 +27,11 @@ const api: LumineApi = {
     list: () => ipcRenderer.invoke(IPC.profilesList),
     save: (input: ProfileInput & { id?: string }) =>
       ipcRenderer.invoke(IPC.profilesSave, input),
-    remove: (id: string) => ipcRenderer.invoke(IPC.profilesRemove, id)
+    remove: (id: string) => ipcRenderer.invoke(IPC.profilesRemove, id),
+    pickKey: () => ipcRenderer.invoke(IPC.profilesPickKey)
+  },
+  secrets: {
+    forget: (profileId: string) => ipcRenderer.invoke(IPC.secretsForget, profileId)
   },
   settings: {
     get: () => ipcRenderer.invoke(IPC.settingsGet),
@@ -35,8 +41,14 @@ const api: LumineApi = {
     list: () => ipcRenderer.invoke(IPC.knownHostsList),
     forget: (key: string) => ipcRenderer.invoke(IPC.knownHostsForget, key)
   },
-  connect: (profileId: string, password: string) =>
-    ipcRenderer.invoke(IPC.connect, profileId, password),
+  bookmarks: {
+    list: (profileId: string) => ipcRenderer.invoke(IPC.bookmarksList, profileId),
+    add: (profileId: string, path: string) =>
+      ipcRenderer.invoke(IPC.bookmarksAdd, profileId, path),
+    remove: (id: string) => ipcRenderer.invoke(IPC.bookmarksRemove, id)
+  },
+  connect: (profileId: string, secret: ConnectSecret) =>
+    ipcRenderer.invoke(IPC.connect, profileId, secret),
   disconnect: () => ipcRenderer.invoke(IPC.disconnect),
   respondHostKey: (requestId: string, accept: boolean) =>
     ipcRenderer.invoke(IPC.hostKeyRespond, requestId, accept),
@@ -47,10 +59,14 @@ const api: LumineApi = {
     mkdir: (dir: string, name: string) => ipcRenderer.invoke(IPC.sftpMkdir, dir, name),
     rename: (dir: string, from: string, to: string) =>
       ipcRenderer.invoke(IPC.sftpRename, dir, from, to),
-    remove: (path: string) => ipcRenderer.invoke(IPC.sftpRemove, path),
+    remove: (paths: string[]) => ipcRenderer.invoke(IPC.sftpRemove, paths),
     upload: (dir: string) => ipcRenderer.invoke(IPC.sftpUpload, dir),
-    download: (path: string) => ipcRenderer.invoke(IPC.sftpDownload, path),
-    cancel: (id: string) => ipcRenderer.invoke(IPC.sftpCancel, id)
+    uploadFolder: (dir: string) => ipcRenderer.invoke(IPC.sftpUploadFolder, dir),
+    download: (paths: string[]) => ipcRenderer.invoke(IPC.sftpDownload, paths),
+    cancel: (id: string) => ipcRenderer.invoke(IPC.sftpCancel, id),
+    retry: (id: string) => ipcRenderer.invoke(IPC.sftpRetry, id),
+    reveal: (id: string) => ipcRenderer.invoke(IPC.sftpReveal, id),
+    chmod: (path: string, mode: number) => ipcRenderer.invoke(IPC.sftpChmod, path, mode)
   },
   updates: {
     get: () => ipcRenderer.invoke(IPC.updatesGet),
@@ -63,6 +79,8 @@ const api: LumineApi = {
     subscribe(IPC.eventStatus, callback),
   onHostKey: (callback: (prompt: HostKeyPrompt) => void) =>
     subscribe(IPC.eventHostKey, callback),
+  onHostKeyMismatch: (callback: (prompt: HostKeyMismatchPrompt) => void) =>
+    subscribe(IPC.eventHostKeyMismatch, callback),
   onInteractive: (callback: (request: InteractiveRequest) => void) =>
     subscribe(IPC.eventInteractive, callback),
   onTransfer: (callback: (transfer: TransferInfo) => void) =>

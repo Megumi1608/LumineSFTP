@@ -189,6 +189,40 @@ export function ChevronRightIcon(): ReactElement {
   )
 }
 
+export function ChevronLeftIcon(): ReactElement {
+  return (
+    <Icon>
+      <path d="m15 6-6 6 6 6" />
+    </Icon>
+  )
+}
+
+export function BookmarkIcon(): ReactElement {
+  return (
+    <Icon>
+      <path d="M6 3h12v18l-6-4-6 4Z" />
+    </Icon>
+  )
+}
+
+export function InfoIcon(): ReactElement {
+  return (
+    <Icon>
+      <circle cx="12" cy="12" r="9" />
+      <path d="M12 11v5M12 8h.01" />
+    </Icon>
+  )
+}
+
+export function CopyIcon(): ReactElement {
+  return (
+    <Icon>
+      <rect x="9" y="9" width="11" height="11" rx="2" />
+      <path d="M15 9V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h3" />
+    </Icon>
+  )
+}
+
 export function CheckIcon(): ReactElement {
   return (
     <Icon>

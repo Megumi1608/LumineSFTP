@@ -44,6 +44,12 @@ describe('sanitizeLocalName', () => {
   it('preserves unicode names', () => {
     expect(sanitizeLocalName('báo cáo.xlsx')).toBe('báo cáo.xlsx')
   })
+
+  it('removes bidi and zero-width controls used for extension spoofing', () => {
+    expect(sanitizeLocalName('invoice\u202Efdp.exe')).toBe('invoicefdp.exe')
+    expect(sanitizeLocalName('photo\u200B.jpg')).toBe('photo.jpg')
+    expect(sanitizeLocalName('\u202E')).toBe('download')
+  })
 })
 
 describe('path containment', () => {

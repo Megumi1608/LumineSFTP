@@ -11,7 +11,8 @@ export function ProfileDetail({
   knownHost,
   onConnect,
   onEdit,
-  onRemove
+  onRemove,
+  onForgetSecret
 }: {
   profile: Profile
   status: ConnectionStatus
@@ -20,8 +21,10 @@ export function ProfileDetail({
   onConnect: () => void
   onEdit: () => void
   onRemove: () => void
+  onForgetSecret: () => void
 }): ReactNode {
   const [confirming, setConfirming] = useState(false)
+  const [forgetting, setForgetting] = useState(false)
 
   return (
     <div className="detail">
@@ -78,6 +81,42 @@ export function ProfileDetail({
           </dd>
         </div>
       </dl>
+
+      <div className="trust-row">
+        <span className="trust-icon">
+          <LockIcon size={16} />
+        </span>
+        <div className="trust-copy">
+          <span className="meta-label">{translate(locale, 'authMethod')}</span>
+          <code>
+            {profile.authMethod === 'key'
+              ? profile.keyPath || translate(locale, 'authKey')
+              : translate(locale, 'authPassword')}
+          </code>
+          {profile.hasSavedPassword ? (
+            <span className="trust-meta">{translate(locale, 'savedSecret')}</span>
+          ) : null}
+        </div>
+        {profile.hasSavedPassword ? (
+          <button
+            className={`button tiny${forgetting ? ' danger' : ''}`}
+            type="button"
+            onClick={() => {
+              if (!forgetting) {
+                setForgetting(true)
+                return
+              }
+              setForgetting(false)
+              onForgetSecret()
+            }}
+            onBlur={() => setForgetting(false)}
+          >
+            {forgetting
+              ? translate(locale, 'confirmForgetSecret')
+              : translate(locale, 'forgetSecret')}
+          </button>
+        ) : null}
+      </div>
 
       <div className="trust-row">
         <span className="trust-icon">

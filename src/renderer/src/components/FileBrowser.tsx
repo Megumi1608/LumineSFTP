@@ -1,14 +1,20 @@
-import { useEffect, useState, type ReactNode } from 'react'
-import type { Locale, RemoteEntry, RemoteListing } from '../../../shared/types'
+import { useEffect, useRef, useState, type MouseEvent, type ReactNode } from 'react'
+import { displayName } from '../../../shared/filename'
+import type { Bookmark, Locale, RemoteEntry, RemoteListing } from '../../../shared/types'
 import { formatBytes, formatDate, remoteJoin } from '../format'
 import { translate } from '../i18n'
 import {
+  BookmarkIcon,
+  ChevronLeftIcon,
   ChevronRightIcon,
   ChevronUpIcon,
+  CloseIcon,
+  CopyIcon,
   DownloadIcon,
   FileIcon,
   FolderIcon,
   FolderPlusIcon,
+  InfoIcon,
   LinkIcon,
   PencilIcon,
   RefreshIcon,
@@ -16,63 +22,218 @@ import {
   UploadIcon
 } from './Icons'
 
+type SortKey = 'name' | 'size' | 'modified'
+
 function EntryIcon({ kind }: { kind: RemoteEntry['kind'] }): ReactNode {
   if (kind === 'directory') return <FolderIcon size={17} />
   if (kind === 'link') return <LinkIcon size={17} />
   return <FileIcon size={17} />
 }
 
+function modeText(mode: number): string {
+  return (mode & 0o7777).toString(8).padStart(3, '0')
+}
+
 export function FileBrowser({
   listing,
   locale,
+  bookmarks,
+  canBack,
+  canForward,
+  onBack,
+  onForward,
   onOpen,
   onRefresh,
   onUpload,
+  onUploadFolder,
   onDownload,
   onRename,
   onDelete,
-  onNewFolder
+  onNewFolder,
+  onAddBookmark,
+  onOpenBookmarks,
+  onProperties,
+  onCopyPath
 }: {
   listing: RemoteListing | null
   locale: Locale
+  bookmarks: Bookmark[]
+  canBack: boolean
+  canForward: boolean
+  onBack: () => void
+  onForward: () => void
   onOpen: (path: string) => void
   onRefresh: () => void
   onUpload: () => void
-  onDownload: (path: string) => void
+  onUploadFolder: () => void
+  onDownload: (paths: string[]) => void
   onRename: (entry: RemoteEntry) => void
-  onDelete: (path: string) => void
+  onDelete: (paths: string[]) => void
   onNewFolder: () => void
+  onAddBookmark: () => void
+  onOpenBookmarks: () => void
+  onProperties: (entry: RemoteEntry) => void
+  onCopyPath: (path: string) => void
 }): ReactNode {
   const path = listing?.path ?? '/'
   const entries = listing?.entries ?? []
   const parts = path.split('/').filter(Boolean)
   const parent = path === '/' ? null : `/${parts.slice(0, -1).join('/')}`
-  const [selected, setSelected] = useState<string | null>(null)
+  const [selected, setSelected] = useState<Set<string>>(new Set())
+  const [sortKey, setSortKey] = useState<SortKey>('name')
+  const [sortAsc, setSortAsc] = useState(true)
+  const [filter, setFilter] = useState('')
+  const [showHidden, setShowHidden] = useState(true)
+  const anchor = useRef<number | null>(null)
 
   useEffect(() => {
-    setSelected(null)
+    setSelected(new Set())
+    setFilter('')
+    anchor.current = null
   }, [path])
 
+  const rows = entries
+    .filter((entry) => showHidden || !entry.name.startsWith('.'))
+    .filter((entry) => !filter || entry.name.toLowerCase().includes(filter.toLowerCase()))
+    .slice()
+    .sort((left, right) => {
+      const leftDir = left.kind === 'directory' ? 0 : 1
+      const rightDir = right.kind === 'directory' ? 0 : 1
+      if (leftDir !== rightDir) return leftDir - rightDir
+      let compared = 0
+      if (sortKey === 'name') compared = left.name.localeCompare(right.name)
+      if (sortKey === 'size') compared = left.size - right.size
+      if (sortKey === 'modified') compared = left.modified - right.modified
+      return compared * (sortAsc ? 1 : -1)
+    })
+
+  const targetOf = (entry: RemoteEntry): string => remoteJoin(path, entry.name)
+  const selectedPaths = (): string[] =>
+    rows.filter((entry) => selected.has(entry.name)).map(targetOf)
+
   const activate = (entry: RemoteEntry): void => {
-    const target = remoteJoin(path, entry.name)
+    const target = targetOf(entry)
     if (entry.kind === 'directory') onOpen(target)
-    else if (entry.kind === 'file' || entry.kind === 'link') onDownload(target)
+    else if (entry.kind === 'file' || entry.kind === 'link') onDownload([target])
   }
 
   const canActivate = (entry: RemoteEntry): boolean =>
     entry.kind === 'directory' || entry.kind === 'file' || entry.kind === 'link'
 
-  const rowHint = (entry: RemoteEntry): string | undefined => {
-    if (entry.kind === 'directory') return translate(locale, 'openFolderHint')
-    if (entry.kind === 'file' || entry.kind === 'link') {
-      return translate(locale, 'downloadFileHint')
-    }
-    return undefined
+  const rowHint = (entry: RemoteEntry): string => {
+    const base =
+      entry.kind === 'directory'
+        ? translate(locale, 'openFolderHint')
+        : entry.kind === 'file' || entry.kind === 'link'
+          ? translate(locale, 'downloadFileHint')
+          : ''
+    const mode = entry.kind === 'directory' ? '' : ` · ${modeText(entry.mode)}`
+    return `${base}${mode}`
   }
+
+  const changeSort = (key: SortKey): void => {
+    if (key === sortKey) setSortAsc((value) => !value)
+    else {
+      setSortKey(key)
+      setSortAsc(true)
+    }
+  }
+
+  const sortMark = (key: SortKey): string => (sortKey === key ? (sortAsc ? ' ↑' : ' ↓') : '')
+
+  const selectRow = (entry: RemoteEntry, index: number, event: MouseEvent): void => {
+    if (!canActivate(entry)) return
+    if (event.shiftKey && anchor.current !== null) {
+      const start = Math.min(anchor.current, index)
+      const end = Math.max(anchor.current, index)
+      const next = new Set(selected)
+      for (let cursor = start; cursor <= end; cursor += 1) {
+        const item = rows[cursor]
+        if (item && canActivate(item)) next.add(item.name)
+      }
+      setSelected(next)
+      return
+    }
+    if (event.ctrlKey || event.metaKey) {
+      const next = new Set(selected)
+      if (next.has(entry.name)) next.delete(entry.name)
+      else next.add(entry.name)
+      setSelected(next)
+      anchor.current = index
+      return
+    }
+    setSelected(new Set([entry.name]))
+    anchor.current = index
+  }
+
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent): void => {
+      const target = event.target as HTMLElement | null
+      if (
+        target &&
+        (/^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName) || target.isContentEditable)
+      ) {
+        return
+      }
+      if (document.querySelector('.backdrop')) return
+
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'a') {
+        event.preventDefault()
+        setSelected(new Set(rows.filter(canActivate).map((entry) => entry.name)))
+        return
+      }
+      if (event.key === 'Escape') {
+        setSelected(new Set())
+        return
+      }
+      if (event.key === 'F5') {
+        event.preventDefault()
+        onRefresh()
+        return
+      }
+      if (event.key === 'F2' && selected.size === 1) {
+        const only = rows.find((entry) => selected.has(entry.name))
+        if (only) {
+          event.preventDefault()
+          onRename(only)
+        }
+        return
+      }
+      if (event.key === 'Delete' && selected.size > 0) {
+        event.preventDefault()
+        onDelete(selectedPaths())
+        return
+      }
+      if (event.key === 'Enter' && selected.size === 1) {
+        const only = rows.find((entry) => selected.has(entry.name))
+        if (only) activate(only)
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  })
 
   return (
     <section className="browser">
       <div className="toolbar">
+        <button
+          className="icon-button"
+          type="button"
+          title={translate(locale, 'back')}
+          onClick={onBack}
+          disabled={!canBack}
+        >
+          <ChevronLeftIcon />
+        </button>
+        <button
+          className="icon-button"
+          type="button"
+          title={translate(locale, 'forward')}
+          onClick={onForward}
+          disabled={!canForward}
+        >
+          <ChevronRightIcon />
+        </button>
         <button
           className="icon-button"
           type="button"
@@ -95,7 +256,7 @@ export function FileBrowser({
                   <span className="crumb-wrap" key={target}>
                     <ChevronRightIcon />
                     <button className="crumb" type="button" onClick={() => onOpen(target)}>
-                      {part}
+                      {displayName(part)}
                     </button>
                   </span>
                 )
@@ -109,9 +270,36 @@ export function FileBrowser({
         <div className="toolbar-actions">
           {listing ? (
             <span className="item-count">
-              {translate(locale, 'itemsCount', { n: entries.length })}
+              {translate(locale, 'itemsCount', { n: rows.length })}
             </span>
           ) : null}
+          <button
+            className="icon-button"
+            type="button"
+            title={translate(locale, 'addBookmark')}
+            onClick={onAddBookmark}
+            disabled={!listing}
+          >
+            <BookmarkIcon />
+          </button>
+          <button
+            className="icon-button"
+            type="button"
+            title={translate(locale, 'bookmarks')}
+            onClick={onOpenBookmarks}
+            disabled={bookmarks.length === 0}
+          >
+            <span className="bookmark-count">{bookmarks.length}</span>
+          </button>
+          <button
+            className="icon-button"
+            type="button"
+            title={translate(locale, 'copyPath')}
+            onClick={() => onCopyPath(path)}
+            disabled={!listing}
+          >
+            <CopyIcon />
+          </button>
           <button
             className="button tiny"
             type="button"
@@ -119,6 +307,15 @@ export function FileBrowser({
             disabled={!listing}
           >
             <FolderPlusIcon /> {translate(locale, 'newFolder')}
+          </button>
+          <button
+            className="button tiny"
+            type="button"
+            onClick={onUploadFolder}
+            disabled={!listing}
+            title={translate(locale, 'uploadFolder')}
+          >
+            <FolderIcon size={15} /> {translate(locale, 'uploadFolderShort')}
           </button>
           <button
             className="button primary tiny"
@@ -140,11 +337,67 @@ export function FileBrowser({
         </div>
       </div>
 
+      <div className="file-tools">
+        <input
+          className="filter-input"
+          value={filter}
+          onChange={(event) => setFilter(event.target.value)}
+          placeholder={translate(locale, 'filterPlaceholder')}
+          aria-label={translate(locale, 'filterPlaceholder')}
+        />
+        <button
+          className="button tiny ghost"
+          type="button"
+          onClick={() => setShowHidden((value) => !value)}
+        >
+          {showHidden ? translate(locale, 'hideHidden') : translate(locale, 'showHidden')}
+        </button>
+      </div>
+
+      {selected.size > 1 ? (
+        <div className="selection-bar">
+          <span className="selection-count">
+            {translate(locale, 'selectedCount', { n: selected.size })}
+          </span>
+          <button
+            className="button tiny"
+            type="button"
+            onClick={() => onDownload(selectedPaths())}
+          >
+            <DownloadIcon /> {translate(locale, 'download')}
+          </button>
+          <button
+            className="button tiny danger"
+            type="button"
+            onClick={() => onDelete(selectedPaths())}
+          >
+            <TrashIcon /> {translate(locale, 'delete')}
+          </button>
+          <button
+            className="icon-button"
+            type="button"
+            title={translate(locale, 'clearSelection')}
+            onClick={() => setSelected(new Set())}
+          >
+            <CloseIcon />
+          </button>
+        </div>
+      ) : null}
+
       <div className="file-scroll">
         <div className="file-head">
-          <span>{translate(locale, 'fileName')}</span>
-          <span className="num">{translate(locale, 'fileSize')}</span>
-          <span className="num">{translate(locale, 'modified')}</span>
+          <button className="head-sort" type="button" onClick={() => changeSort('name')}>
+            {translate(locale, 'fileName')}
+            {sortMark('name')}
+          </button>
+          <button className="head-sort num" type="button" onClick={() => changeSort('size')}>
+            {translate(locale, 'fileSize')}
+            {sortMark('size')}
+          </button>
+          <button className="head-sort num" type="button" onClick={() => changeSort('modified')}>
+            {translate(locale, 'modified')}
+            {sortMark('modified')}
+          </button>
           <span aria-label={translate(locale, 'actions')} />
         </div>
 
@@ -159,7 +412,7 @@ export function FileBrowser({
             ))
           : null}
 
-        {listing && entries.length === 0 ? (
+        {listing && rows.length === 0 ? (
           <div className="empty-folder">
             <p>{translate(locale, 'emptyFolder')}</p>
             <button className="text-action" type="button" onClick={onUpload}>
@@ -169,18 +422,18 @@ export function FileBrowser({
         ) : null}
 
         {listing
-          ? entries.map((entry) => {
-              const target = remoteJoin(listing.path, entry.name)
+          ? rows.map((entry, index) => {
+              const target = targetOf(entry)
+              const shown = displayName(entry.name)
               const actionable = canActivate(entry)
+              const isSelected = selected.has(entry.name)
               return (
                 <div
                   className={`file-row${actionable ? ' clickable' : ''}${
-                    selected === entry.name ? ' selected' : ''
+                    isSelected ? ' selected' : ''
                   }`}
                   key={entry.name}
-                  onClick={() => {
-                    if (actionable) setSelected(entry.name)
-                  }}
+                  onClick={(event) => selectRow(entry, index, event)}
                   onDoubleClick={() => {
                     if (actionable) activate(entry)
                   }}
@@ -196,14 +449,14 @@ export function FileBrowser({
                   }}
                   tabIndex={actionable ? 0 : -1}
                   title={rowHint(entry)}
-                  aria-label={entry.name}
+                  aria-label={shown}
                 >
                   <div className="file-name">
                     <span className={`entry-icon kind-${entry.kind}`}>
                       <EntryIcon kind={entry.kind} />
                     </span>
-                    <span className="ellipsis" title={entry.name}>
-                      {entry.name}
+                    <span className="ellipsis" title={shown}>
+                      {shown}
                     </span>
                   </div>
                   <span className="file-size num">
@@ -220,11 +473,19 @@ export function FileBrowser({
                         className="icon-button"
                         type="button"
                         title={translate(locale, 'download')}
-                        onClick={() => onDownload(target)}
+                        onClick={() => onDownload([target])}
                       >
                         <DownloadIcon />
                       </button>
                     ) : null}
+                    <button
+                      className="icon-button"
+                      type="button"
+                      title={translate(locale, 'properties')}
+                      onClick={() => onProperties(entry)}
+                    >
+                      <InfoIcon />
+                    </button>
                     <button
                       className="icon-button"
                       type="button"
@@ -237,7 +498,7 @@ export function FileBrowser({
                       className="icon-button danger"
                       type="button"
                       title={translate(locale, 'delete')}
-                      onClick={() => onDelete(target)}
+                      onClick={() => onDelete([target])}
                     >
                       <TrashIcon />
                     </button>

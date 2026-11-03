@@ -96,7 +96,7 @@ export function initUpdater(listener: (status: UpdateStatus) => void): void {
   initialized = true
 
   autoUpdater.autoDownload = false
-  autoUpdater.autoInstallOnAppQuit = true
+  autoUpdater.autoInstallOnAppQuit = false
   autoUpdater.allowPrerelease = false
 
   autoUpdater.on('checking-for-update', () => {

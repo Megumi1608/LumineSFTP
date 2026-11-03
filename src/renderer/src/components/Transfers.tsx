@@ -1,8 +1,8 @@
 import type { ReactNode } from 'react'
 import type { Locale, TransferInfo } from '../../../shared/types'
-import { formatBytes, percent } from '../format'
+import { formatBytes, formatDuration, percent } from '../format'
 import { errorText, translate, type I18nKey } from '../i18n'
-import { CloseIcon, DownloadIcon, UploadIcon } from './Icons'
+import { CloseIcon, DownloadIcon, FolderIcon, RefreshIcon, UploadIcon } from './Icons'
 
 const STATE_KEY: Record<TransferInfo['state'], I18nKey> = {
   queued: 'queued',
@@ -24,11 +24,15 @@ export function Transfers({
   transfers,
   locale,
   onCancel,
+  onRetry,
+  onReveal,
   onClear
 }: {
   transfers: TransferInfo[]
   locale: Locale
   onCancel: (id: string) => void
+  onRetry: (id: string) => void
+  onReveal: (id: string) => void
   onClear: () => void
 }): ReactNode {
   if (transfers.length === 0) return null
@@ -71,9 +75,35 @@ export function Transfers({
                   <span>
                     {formatBytes(transfer.transferred)} / {formatBytes(transfer.total)}
                   </span>
+                  {transfer.state === 'running' && transfer.speed ? (
+                    <span>{formatBytes(transfer.speed)}/s</span>
+                  ) : null}
+                  {transfer.state === 'running' && transfer.eta ? (
+                    <span>~{formatDuration(transfer.eta)}</span>
+                  ) : null}
                   <span>{value}%</span>
                 </div>
               </div>
+              {transfer.state === 'error' && transfer.canRetry ? (
+                <button
+                  className="icon-button"
+                  type="button"
+                  title={translate(locale, 'retryTransfer')}
+                  onClick={() => onRetry(transfer.id)}
+                >
+                  <RefreshIcon />
+                </button>
+              ) : null}
+              {transfer.state === 'done' && transfer.direction === 'download' ? (
+                <button
+                  className="icon-button"
+                  type="button"
+                  title={translate(locale, 'revealDownload')}
+                  onClick={() => onReveal(transfer.id)}
+                >
+                  <FolderIcon size={16} />
+                </button>
+              ) : null}
               {canCancel ? (
                 <button
                   className="icon-button"

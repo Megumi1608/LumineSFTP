@@ -1,10 +1,14 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import type {
+  Bookmark,
+  ConnectSecret,
   ConnectionStatus,
   ErrorCode,
+  HostKeyMismatchPrompt,
   HostKeyPrompt,
   InteractiveRequest,
   KnownHost,
+  KnownHostsHealth,
   Locale,
   Profile,
   RemoteEntry,
@@ -13,18 +17,22 @@ import type {
   UpdateStatus
 } from '../../shared/types'
 import { FileBrowser } from './components/FileBrowser'
+import { BookmarksDialog } from './components/BookmarksDialog'
 import { HostKeyDialog } from './components/HostKeyDialog'
+import { HostKeyMismatchDialog } from './components/HostKeyMismatchDialog'
 import { InteractiveDialog } from './components/InteractiveDialog'
 import { Onboarding } from './components/Onboarding'
 import { PasswordDialog } from './components/PasswordDialog'
 import { ProfileDetail } from './components/ProfileDetail'
 import { ProfileDialog } from './components/ProfileDialog'
+import { PropertiesDialog } from './components/PropertiesDialog'
 import { PromptDialog } from './components/PromptDialog'
 import { QrDialog } from './components/QrDialog'
 import { SettingsDialog } from './components/SettingsDialog'
 import { Sidebar } from './components/Sidebar'
 import { Toasts, type ToastItem } from './components/Toasts'
 import { Transfers } from './components/Transfers'
+import { remoteJoin } from './format'
 import { errorText, translate } from './i18n'
 
 type PromptState =
@@ -35,7 +43,8 @@ const IGNORED_ERRORS: ErrorCode[] = [
   'DIALOG_CANCELLED',
   'TRANSFER_CANCELLED',
   'AUTH_CANCELLED',
-  'HOST_KEY_REJECTED'
+  'HOST_KEY_REJECTED',
+  'HOST_KEY_MISMATCH'
 ]
 
 function statusLabel(locale: Locale, state: ConnectionStatus['state']): string {
@@ -60,6 +69,20 @@ export default function App(): ReactNode {
   const [version, setVersion] = useState('')
   const [profiles, setProfiles] = useState<Profile[]>([])
   const [knownHosts, setKnownHosts] = useState<KnownHost[]>([])
+  const [bookmarks, setBookmarks] = useState<Bookmark[]>([])
+  const [bookmarksOpen, setBookmarksOpen] = useState(false)
+  const [properties, setProperties] = useState<{
+    entry: RemoteEntry
+    path: string
+  } | null>(null)
+  const [propertiesBusy, setPropertiesBusy] = useState(false)
+  const [propertiesError, setPropertiesError] = useState<string | null>(null)
+  const [historyState, setHistoryState] = useState({
+    canBack: false,
+    canForward: false
+  })
+  const [knownHostsHealth, setKnownHostsHealth] = useState<KnownHostsHealth>('ok')
+  const [secretStorageAvailable, setSecretStorageAvailable] = useState(false)
   const [activeProfileId, setActiveProfileId] = useState<string | null>(null)
   const [status, setStatus] = useState<ConnectionStatus>({ state: 'disconnected' })
   const [listing, setListing] = useState<RemoteListing | null>(null)
@@ -75,8 +98,10 @@ export default function App(): ReactNode {
   })
 
   const [hostKey, setHostKey] = useState<HostKeyPrompt | null>(null)
+  const [hostKeyMismatch, setHostKeyMismatch] = useState<HostKeyMismatchPrompt | null>(null)
   const [interactive, setInteractive] = useState<InteractiveRequest | null>(null)
   const [passwordProfile, setPasswordProfile] = useState<Profile | null>(null)
+  const [authError, setAuthError] = useState<string | null>(null)
   const [profileDialog, setProfileDialog] = useState<
     { mode: 'add' } | { mode: 'edit'; profile: Profile } | null
   >(null)
@@ -90,6 +115,21 @@ export default function App(): ReactNode {
   const toastCounter = useRef(0)
   const requestCounter = useRef(0)
   const lastError = useRef<{ code: ErrorCode; at: number } | null>(null)
+  const listingRef = useRef<RemoteListing | null>(null)
+  const refreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const historyRef = useRef<string[]>([])
+  const historyIndexRef = useRef(-1)
+
+  useEffect(() => {
+    listingRef.current = listing
+  }, [listing])
+
+  useEffect(
+    () => () => {
+      if (refreshTimer.current) clearTimeout(refreshTimer.current)
+    },
+    []
+  )
 
   const notify = useCallback((message: string, tone: 'info' | 'error' = 'info'): void => {
     toastCounter.current += 1
@@ -123,8 +163,23 @@ export default function App(): ReactNode {
     if (result.ok) setKnownHosts(result.data)
   }, [])
 
+  const pushHistory = useCallback((target: string): void => {
+    const next = historyRef.current.slice(0, historyIndexRef.current + 1)
+    if (next[next.length - 1] === target) return
+    next.push(target)
+    historyRef.current = next
+    historyIndexRef.current = next.length - 1
+    setHistoryState({ canBack: next.length > 1, canForward: false })
+  }, [])
+
+  const resetHistory = useCallback((): void => {
+    historyRef.current = []
+    historyIndexRef.current = -1
+    setHistoryState({ canBack: false, canForward: false })
+  }, [])
+
   const openPath = useCallback(
-    async (path: string): Promise<void> => {
+    async (path: string, recordHistory = true): Promise<void> => {
       const token = ++requestCounter.current
       setBusy(true)
       const result = await window.lumine.sftp.list(path)
@@ -133,13 +188,118 @@ export default function App(): ReactNode {
       if (result.ok) {
         setListing(result.data)
         setListingError(null)
+        if (recordHistory) pushHistory(result.data.path)
         document.title = `${result.data.path} · Lumine SFTP`
       } else {
         setListingError({ code: result.code, ...(result.detail ? { detail: result.detail } : {}) })
         reportError(result.code, result.detail)
       }
     },
-    [reportError]
+    [pushHistory, reportError]
+  )
+
+  const goBack = useCallback((): void => {
+    const index = historyIndexRef.current - 1
+    const target = historyRef.current[index]
+    if (index < 0 || !target) return
+    historyIndexRef.current = index
+    setHistoryState({ canBack: index > 0, canForward: true })
+    void openPath(target, false)
+  }, [openPath])
+
+  const goForward = useCallback((): void => {
+    const index = historyIndexRef.current + 1
+    const target = historyRef.current[index]
+    if (!target) return
+    historyIndexRef.current = index
+    setHistoryState({
+      canBack: index > 0,
+      canForward: index < historyRef.current.length - 1
+    })
+    void openPath(target, false)
+  }, [openPath])
+
+  useEffect(() => {
+    let alive = true
+    if (!activeProfileId) {
+      setBookmarks([])
+      return
+    }
+    void window.lumine.bookmarks.list(activeProfileId).then((result) => {
+      if (alive && result.ok) setBookmarks(result.data)
+    })
+    return () => {
+      alive = false
+    }
+  }, [activeProfileId])
+
+  const addBookmark = useCallback(async (): Promise<void> => {
+    if (!activeProfileId || !listing) return
+    const result = await window.lumine.bookmarks.add(activeProfileId, listing.path)
+    if (!result.ok) {
+      reportError(result.code, result.detail)
+      return
+    }
+    setBookmarks((current) =>
+      [...current.filter((item) => item.id !== result.data.id), result.data].sort((a, b) =>
+        a.name.localeCompare(b.name)
+      )
+    )
+    notify(translate(locale, 'bookmarkAdded'))
+  }, [activeProfileId, listing, locale, notify, reportError])
+
+  const removeBookmark = useCallback(
+    async (id: string): Promise<void> => {
+      const result = await window.lumine.bookmarks.remove(id)
+      if (!result.ok) {
+        reportError(result.code, result.detail)
+        return
+      }
+      setBookmarks((current) => current.filter((item) => item.id !== id))
+      notify(translate(locale, 'bookmarkRemoved'))
+    },
+    [locale, notify, reportError]
+  )
+
+  const copyPath = useCallback(
+    async (target: string): Promise<void> => {
+      try {
+        await navigator.clipboard.writeText(target)
+        notify(translate(locale, 'copiedPath'))
+      } catch {
+        reportError('INTERNAL')
+      }
+    },
+    [locale, notify, reportError]
+  )
+
+  const openProperties = useCallback(
+    (entry: RemoteEntry): void => {
+      setPropertiesError(null)
+      setProperties({
+        entry,
+        path: remoteJoin(listingRef.current?.path ?? '/', entry.name)
+      })
+    },
+    []
+  )
+
+  const submitChmod = useCallback(
+    async (mode: number): Promise<void> => {
+      if (!properties) return
+      setPropertiesBusy(true)
+      setPropertiesError(null)
+      const result = await window.lumine.sftp.chmod(properties.path, mode)
+      setPropertiesBusy(false)
+      if (!result.ok) {
+        setPropertiesError(errorText(locale, result.code, result.detail))
+        return
+      }
+      setProperties(null)
+      if (listingRef.current) await openPath(listingRef.current.path)
+      notify(translate(locale, 'chmodDone'))
+    },
+    [locale, notify, openPath, properties]
   )
 
   useEffect(() => {
@@ -155,6 +315,8 @@ export default function App(): ReactNode {
       if (settings.ok) {
         setLocale(settings.data.locale)
         setVersion(settings.data.version)
+        setKnownHostsHealth(settings.data.knownHostsHealth)
+        setSecretStorageAvailable(settings.data.secretStorageAvailable)
         document.documentElement.lang = settings.data.locale
       } else {
         reportError(settings.code, settings.detail)
@@ -184,6 +346,7 @@ export default function App(): ReactNode {
         setBusy(false)
         setListing(null)
         setListingError(null)
+        resetHistory()
         document.title = 'Lumine SFTP'
       }
       if (next.state === 'error' && next.code) {
@@ -197,6 +360,11 @@ export default function App(): ReactNode {
       setHostKey(promptValue)
     })
 
+    const offHostKeyMismatch = window.lumine.onHostKeyMismatch((promptValue) => {
+      setPasswordProfile(null)
+      setHostKeyMismatch(promptValue)
+    })
+
     const offInteractive = window.lumine.onInteractive((request) => {
       setPasswordProfile(null)
       setInteractive(request)
@@ -204,6 +372,13 @@ export default function App(): ReactNode {
 
     const offTransfer = window.lumine.onTransfer((transfer) => {
       setTransfers((current) => ({ ...current, [transfer.id]: transfer }))
+      if (transfer.state === 'done' && transfer.direction === 'upload' && listingRef.current) {
+        const target = listingRef.current.path
+        if (refreshTimer.current) clearTimeout(refreshTimer.current)
+        refreshTimer.current = setTimeout(() => {
+          void openPath(target)
+        }, 500)
+      }
     })
 
     const offUpdate = window.lumine.onUpdate((next) => {
@@ -213,11 +388,12 @@ export default function App(): ReactNode {
     return () => {
       offStatus()
       offHostKey()
+      offHostKeyMismatch()
       offInteractive()
       offTransfer()
       offUpdate()
     }
-  }, [openPath, reportError])
+  }, [openPath, reportError, resetHistory])
 
   const upsertProfile = useCallback((profile: Profile): void => {
     setProfiles((current) => {
@@ -241,24 +417,58 @@ export default function App(): ReactNode {
     setConnecting(false)
     requestCounter.current += 1
     setBusy(false)
-  }, [reportError])
+    resetHistory()
+  }, [reportError, resetHistory])
 
   const handleConnect = useCallback(
-    async (profile: Profile, password: string): Promise<void> => {
+    async (profile: Profile, secret: ConnectSecret): Promise<void> => {
       setConnecting(true)
       setActiveProfileId(profile.id)
-      const result = await window.lumine.connect(profile.id, password)
+      setAuthError(null)
+      resetHistory()
+      const result = await window.lumine.connect(profile.id, secret)
       setConnecting(false)
-      setPasswordProfile(null)
       if (!result.ok) {
-        reportError(result.code, result.detail, true)
+        if (result.code === 'SECRET_REQUIRED' || result.code === 'AUTH_FAILED') {
+          setPasswordProfile(profile)
+          setAuthError(errorText(locale, result.code, result.detail))
+        } else {
+          setPasswordProfile(null)
+          reportError(result.code, result.detail, true)
+        }
         return
       }
+      setPasswordProfile(null)
       upsertProfile(result.data)
       void refreshKnownHosts()
       await openPath('')
     },
-    [openPath, refreshKnownHosts, reportError, upsertProfile]
+    [locale, openPath, refreshKnownHosts, reportError, resetHistory, upsertProfile]
+  )
+
+  const startConnect = useCallback(
+    (profile: Profile): void => {
+      setAuthError(null)
+      if (profile.authMethod === 'password' && !profile.hasSavedPassword) {
+        setPasswordProfile(profile)
+        return
+      }
+      void handleConnect(profile, {})
+    },
+    [handleConnect]
+  )
+
+  const forgetSecret = useCallback(
+    async (profile: Profile): Promise<void> => {
+      const result = await window.lumine.secrets.forget(profile.id)
+      if (!result.ok) {
+        reportError(result.code, result.detail)
+        return
+      }
+      upsertProfile(result.data)
+      notify(translate(locale, 'secretForgotten'))
+    },
+    [locale, notify, reportError, upsertProfile]
   )
 
   const selectProfile = useCallback(
@@ -279,8 +489,9 @@ export default function App(): ReactNode {
       setActiveProfileId(profile.id)
       setListing(null)
       setListingError(null)
+      resetHistory()
     },
-    [activeProfileId, disconnect, status.state]
+    [activeProfileId, disconnect, resetHistory, status.state]
   )
 
   const removeProfile = useCallback(
@@ -303,25 +514,30 @@ export default function App(): ReactNode {
     [activeProfileId, disconnect, locale, notify, profiles, reportError]
   )
 
-  const upload = useCallback(async (): Promise<void> => {
-    if (!listing) return
-    const result = await window.lumine.sftp.upload(listing.path)
-    if (result.ok) notify(translate(locale, 'uploadStarted'))
-    else reportError(result.code, result.detail)
-  }, [listing, locale, notify, reportError])
+  const upload = useCallback(
+    async (folder = false): Promise<void> => {
+      if (!listing) return
+      const result = folder
+        ? await window.lumine.sftp.uploadFolder(listing.path)
+        : await window.lumine.sftp.upload(listing.path)
+      if (result.ok) notify(translate(locale, 'uploadStarted'))
+      else reportError(result.code, result.detail)
+    },
+    [listing, locale, notify, reportError]
+  )
 
   const download = useCallback(
-    async (path: string): Promise<void> => {
-      const result = await window.lumine.sftp.download(path)
+    async (paths: string[]): Promise<void> => {
+      const result = await window.lumine.sftp.download(paths)
       if (result.ok) notify(translate(locale, 'downloadStarted'))
       else reportError(result.code, result.detail)
     },
     [locale, notify, reportError]
   )
 
-  const removeEntry = useCallback(
-    async (path: string): Promise<void> => {
-      const result = await window.lumine.sftp.remove(path)
+  const removeEntries = useCallback(
+    async (paths: string[]): Promise<void> => {
+      const result = await window.lumine.sftp.remove(paths)
       if (!result.ok) {
         reportError(result.code, result.detail)
         return
@@ -459,7 +675,7 @@ export default function App(): ReactNode {
                   className="button head-button primary"
                   type="button"
                   disabled={connecting}
-                  onClick={() => setPasswordProfile(activeProfile)}
+                  onClick={() => startConnect(activeProfile)}
                 >
                   {translate(locale, 'connect')}
                 </button>
@@ -489,13 +705,23 @@ export default function App(): ReactNode {
                 <FileBrowser
                   listing={listing}
                   locale={locale}
+                  bookmarks={bookmarks}
+                  canBack={historyState.canBack}
+                  canForward={historyState.canForward}
+                  onBack={goBack}
+                  onForward={goForward}
                   onOpen={(path) => void openPath(path)}
                   onRefresh={() => listing && void openPath(listing.path)}
-                  onUpload={() => void upload()}
-                  onDownload={(path) => void download(path)}
+                  onUpload={() => void upload(false)}
+                  onUploadFolder={() => void upload(true)}
+                  onDownload={(paths) => void download(paths)}
                   onRename={(entry) => setPrompt({ kind: 'rename', entry })}
-                  onDelete={(path) => void removeEntry(path)}
+                  onDelete={(paths) => void removeEntries(paths)}
                   onNewFolder={() => setPrompt({ kind: 'mkdir' })}
+                  onAddBookmark={() => void addBookmark()}
+                  onOpenBookmarks={() => setBookmarksOpen(true)}
+                  onProperties={(entry) => openProperties(entry)}
+                  onCopyPath={(target) => void copyPath(target)}
                 />
               )
             ) : activeProfile ? (
@@ -504,9 +730,10 @@ export default function App(): ReactNode {
                 status={status}
                 locale={locale}
                 knownHost={knownHost}
-                onConnect={() => setPasswordProfile(activeProfile)}
+                onConnect={() => startConnect(activeProfile)}
                 onEdit={() => setProfileDialog({ mode: 'edit', profile: activeProfile })}
                 onRemove={() => void removeProfile(activeProfile)}
+                onForgetSecret={() => void forgetSecret(activeProfile)}
               />
             ) : (
               <Onboarding
@@ -521,6 +748,8 @@ export default function App(): ReactNode {
             transfers={transferList}
             locale={locale}
             onCancel={(id) => void window.lumine.sftp.cancel(id)}
+            onRetry={(id) => void window.lumine.sftp.retry(id)}
+            onReveal={(id) => void window.lumine.sftp.reveal(id)}
             onClear={() =>
               setTransfers((current) => {
                 const next: Record<string, TransferInfo> = {}
@@ -570,7 +799,7 @@ export default function App(): ReactNode {
             notify(translate(locale, 'profileSaved'))
             setActiveProfileId(profile.id)
             setListing(null)
-            if (connectNow) setPasswordProfile(profile)
+            if (connectNow) startConnect(profile)
           }}
         />
       ) : null}
@@ -580,8 +809,13 @@ export default function App(): ReactNode {
           profile={passwordProfile}
           locale={locale}
           busy={connecting}
-          onClose={() => setPasswordProfile(null)}
-          onSubmit={(password) => void handleConnect(passwordProfile, password)}
+          canSave={secretStorageAvailable}
+          error={authError}
+          onClose={() => {
+            setPasswordProfile(null)
+            setAuthError(null)
+          }}
+          onSubmit={(secret) => void handleConnect(passwordProfile, secret)}
         />
       ) : null}
 
@@ -590,6 +824,18 @@ export default function App(): ReactNode {
           prompt={hostKey}
           locale={locale}
           onRespond={(accept) => void respondHostKey(accept)}
+        />
+      ) : null}
+
+      {hostKeyMismatch ? (
+        <HostKeyMismatchDialog
+          prompt={hostKeyMismatch}
+          locale={locale}
+          onClose={() => setHostKeyMismatch(null)}
+          onOpenSettings={() => {
+            setHostKeyMismatch(null)
+            setSettingsOpen(true)
+          }}
         />
       ) : null}
 
@@ -606,6 +852,7 @@ export default function App(): ReactNode {
         <SettingsDialog
           locale={locale}
           version={version}
+          knownHostsHealth={knownHostsHealth}
           onLocaleChange={(next) => {
             setLocale(next)
             document.documentElement.lang = next
@@ -614,6 +861,28 @@ export default function App(): ReactNode {
             setSettingsOpen(false)
             void refreshKnownHosts()
           }}
+        />
+      ) : null}
+
+      {bookmarksOpen ? (
+        <BookmarksDialog
+          bookmarks={bookmarks}
+          locale={locale}
+          onOpen={(target) => void openPath(target)}
+          onRemove={(id) => void removeBookmark(id)}
+          onClose={() => setBookmarksOpen(false)}
+        />
+      ) : null}
+
+      {properties ? (
+        <PropertiesDialog
+          entry={properties.entry}
+          path={properties.path}
+          locale={locale}
+          busy={propertiesBusy}
+          error={propertiesError}
+          onClose={() => setProperties(null)}
+          onSubmit={(mode) => void submitChmod(mode)}
         />
       ) : null}
 

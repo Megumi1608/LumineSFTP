@@ -33,6 +33,14 @@ export function mapError(error: unknown): { code: ErrorCode; detail?: string } {
 
   const problem = (error ?? {}) as NetworkError
   const rawCode = problem.code
+  const rawMessage = typeof problem.message === 'string' ? problem.message : ''
+
+  if (
+    /no matching (host key|key exchange|cipher|mac|compression)/i.test(rawMessage) ||
+    /(unsupported|incompatible) (algorithm|host key|key exchange|cipher|mac)/i.test(rawMessage)
+  ) {
+    return { code: 'ALGORITHM_UNSUPPORTED', detail: cleanDetail(rawMessage) }
+  }
 
   if (problem.level === 'client-authentication') {
     return { code: 'AUTH_FAILED' }

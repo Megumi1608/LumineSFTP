@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from 'react'
-import type { KnownHost, Locale, UpdateStatus } from '../../../shared/types'
+import type { KnownHost, KnownHostsHealth, Locale, UpdateStatus } from '../../../shared/types'
 import { errorText, translate } from '../i18n'
 import { Modal } from './Modal'
 
@@ -29,11 +29,13 @@ function updateMessage(locale: Locale, update: UpdateStatus): string {
 export function SettingsDialog({
   locale,
   version,
+  knownHostsHealth,
   onLocaleChange,
   onClose
 }: {
   locale: Locale
   version: string
+  knownHostsHealth: KnownHostsHealth
   onLocaleChange: (locale: Locale) => void
   onClose: () => void
 }): ReactNode {
@@ -244,6 +246,12 @@ export function SettingsDialog({
           </button>
         </div>
         <p className="hint">{translate(locale, 'knownHostsHint')}</p>
+        {knownHostsHealth === 'partial' ? (
+          <div className="notice warning">{translate(locale, 'knownHostsHealthPartial')}</div>
+        ) : null}
+        {knownHostsHealth === 'recovered' ? (
+          <div className="notice danger">{translate(locale, 'knownHostsHealthRecovered')}</div>
+        ) : null}
         {loading ? <p className="hint">{translate(locale, 'loading')}</p> : null}
         {!loading && knownHosts.length === 0 ? (
           <p className="hint">{translate(locale, 'knownHostsEmpty')}</p>

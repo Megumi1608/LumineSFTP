@@ -38,3 +38,12 @@ export function percent(transferred: number, total: number): number {
   if (total <= 0) return 0
   return Math.min(100, Math.max(0, Math.round((transferred / total) * 100)))
 }
+
+export function formatDuration(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds <= 0) return '—'
+  if (seconds < 60) return `${Math.ceil(seconds)}s`
+  const minutes = Math.floor(seconds / 60)
+  const rest = Math.round(seconds % 60)
+  if (minutes < 60) return `${minutes}m ${rest}s`
+  return `${Math.floor(minutes / 60)}h ${minutes % 60}m`
+}

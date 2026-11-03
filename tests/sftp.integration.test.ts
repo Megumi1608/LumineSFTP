@@ -3,7 +3,12 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import type { KnownHost, Profile, TransferInfo } from '../src/shared/types'
+import type {
+  HostKeyMismatchPrompt,
+  KnownHost,
+  Profile,
+  TransferInfo
+} from '../src/shared/types'
 import { AppError } from '../src/main/errors'
 import { SftpSession, type SessionEvents } from '../src/main/ssh'
 
@@ -23,6 +28,7 @@ interface Waiter {
 function makeHarness(profile: Profile) {
   const hosts = new Map<string, KnownHost>()
   const waiters: Waiter[] = []
+  const mismatches: HostKeyMismatchPrompt[] = []
   let session: SftpSession
 
   const knownHosts = {
@@ -52,6 +58,9 @@ function makeHarness(profile: Profile) {
     hostKey: (prompt) => {
       session.respondHostKey(prompt.requestId, true)
     },
+    hostKeyMismatch: (prompt) => {
+      mismatches.push(prompt)
+    },
     interactive: () => {},
     transfer: (transfer) => {
       const index = waiters.findIndex(
@@ -75,6 +84,7 @@ function makeHarness(profile: Profile) {
   return {
     session,
     hosts,
+    mismatches,
     waitForTransfer(name: string, direction: 'upload' | 'download'): Promise<TransferInfo> {
       return new Promise((resolve, reject) => {
         waiters.push({ name, direction, resolve, reject })
@@ -89,6 +99,8 @@ const profile: Profile = {
   host,
   port,
   username,
+  authMethod: 'password',
+  keyPath: null,
   createdAt: Date.now(),
   lastUsedAt: null
 }
@@ -135,14 +147,23 @@ describe.skipIf(!enabled)('SftpSession integration', () => {
 
   it('uploads, downloads, renames and deletes a file', async () => {
     const uploaded = harness.waitForTransfer('payload.bin', 'upload')
-    await harness.session.upload([localFile], workDir, false)
+    await harness.session.upload([localFile], workDir, 'error')
     await uploaded
 
     let listing = await harness.session.list(workDir)
     expect(listing.entries.some((entry) => entry.name === 'payload.bin')).toBe(true)
 
+    await harness.session.chmod(`${workDir}/payload.bin`, 0o640)
+    listing = await harness.session.list(workDir)
+    const chmodEntry = listing.entries.find((entry) => entry.name === 'payload.bin')
+    expect((chmodEntry?.mode ?? 0) & 0o777).toBe(0o640)
+
+    const reuploaded = harness.waitForTransfer('payload.bin', 'upload')
+    await harness.session.upload([localFile], workDir, 'overwrite')
+    await reuploaded
+
     const downloaded = harness.waitForTransfer('payload.bin', 'download')
-    await harness.session.download(`${workDir}/payload.bin`, downloadDir, true)
+    await harness.session.download([`${workDir}/payload.bin`], downloadDir, 'overwrite')
     await downloaded
 
     const localHash = createHash('sha256').update(fs.readFileSync(localFile)).digest('hex')
@@ -154,6 +175,31 @@ describe.skipIf(!enabled)('SftpSession integration', () => {
     await harness.session.rename(workDir, 'payload.bin', 'renamed.bin')
     listing = await harness.session.list(workDir)
     expect(listing.entries.some((entry) => entry.name === 'renamed.bin')).toBe(true)
+
+    const folder = path.join(downloadDir, 'tree')
+    fs.mkdirSync(path.join(folder, 'nested'), { recursive: true })
+    fs.writeFileSync(path.join(folder, 'nested', 'child.bin'), randomBytes(4096))
+    const folderUpload = harness.waitForTransfer('child.bin', 'upload')
+    await harness.session.upload([folder], workDir, 'error')
+    await folderUpload
+
+    const tree = await harness.session.list(`${workDir}/tree/nested`)
+    expect(tree.entries.some((entry) => entry.name === 'child.bin')).toBe(true)
+
+    const recreate = harness.waitForTransfer('payload.bin', 'upload')
+    await harness.session.upload([localFile], workDir, 'error')
+    await recreate
+
+    const renamedConflict = harness.waitForTransfer('payload (1).bin', 'upload')
+    await harness.session.upload([localFile], workDir, 'rename')
+    await renamedConflict
+
+    const folderDownload = harness.waitForTransfer('child.bin', 'download')
+    const saveDir = path.join(downloadDir, 'saved')
+    fs.mkdirSync(saveDir, { recursive: true })
+    await harness.session.download([`${workDir}/tree`], saveDir, 'error')
+    await folderDownload
+    expect(fs.existsSync(path.join(saveDir, 'tree', 'nested', 'child.bin'))).toBe(true)
 
     await harness.session.remove(`${workDir}/renamed.bin`)
     listing = await harness.session.list(workDir)
@@ -173,6 +219,11 @@ describe.skipIf(!enabled)('SftpSession integration', () => {
     await expect(strict.session.connect(password)).rejects.toMatchObject({
       code: 'HOST_KEY_MISMATCH'
     })
+    expect(strict.mismatches).toHaveLength(1)
+    expect(strict.mismatches[0]).toMatchObject({
+      expectedFingerprint: 'SHA256:definitely-not-the-real-key'
+    })
+    expect(strict.mismatches[0]?.receivedFingerprint).toMatch(/^SHA256:/)
     strict.session.dispose()
   }, 20_000)
 
@@ -182,6 +233,23 @@ describe.skipIf(!enabled)('SftpSession integration', () => {
       code: 'AUTH_FAILED'
     })
     wrong.session.dispose()
+  }, 20_000)
+
+  it.skipIf(!process.env.SFTP_KEY_PATH)('connects with a private key', async () => {
+    const keyProfile: Profile = {
+      ...profile,
+      id: '33333333-3333-4333-8333-333333333333',
+      port: Number(process.env.SFTP_KEY_PORT ?? 2223),
+      authMethod: 'key',
+      keyPath: process.env.SFTP_KEY_PATH ?? null
+    }
+    const keyHarness = makeHarness(keyProfile)
+    await keyHarness.session.connect({
+      privateKey: fs.readFileSync(process.env.SFTP_KEY_PATH as string)
+    })
+    const listing = await keyHarness.session.list('.')
+    expect(Array.isArray(listing.entries)).toBe(true)
+    keyHarness.session.dispose()
   }, 20_000)
 
   it('does not allow deleting the remote root', async () => {

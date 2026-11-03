@@ -1,4 +1,5 @@
 import path from 'node:path'
+import { removeInvisibleControls } from '../shared/filename'
 
 const RESERVED_NAME = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i
 const ILLEGAL_LOCAL_CHARS = /[\u0000-\u001f\u007f<>:"|?*]/g
@@ -11,7 +12,7 @@ const ILLEGAL_LOCAL_CHARS = /[\u0000-\u001f\u007f<>:"|?*]/g
 export function sanitizeLocalName(input: string): string {
   const raw = typeof input === 'string' ? input : ''
   const base = raw.split(/[\\/]/).pop() ?? ''
-  let name = base.replace(ILLEGAL_LOCAL_CHARS, '_')
+  let name = removeInvisibleControls(base).replace(ILLEGAL_LOCAL_CHARS, '_')
   name = name.replace(/[. ]+$/g, '')
   if (!name || name === '.' || name === '..') name = 'download'
 
@@ -43,4 +44,16 @@ export function safeLocalTarget(directory: string, remoteName: string): string {
     throw new Error('unsafe local path')
   }
   return target
+}
+
+/** Build a contained local path from server-controlled relative segments. */
+export function safeLocalPath(directory: string, segments: string[]): string {
+  let current = path.resolve(directory)
+  for (const segment of segments) {
+    current = path.resolve(current, sanitizeLocalName(segment))
+  }
+  if (!isInsideDirectory(directory, current)) {
+    throw new Error('unsafe local path')
+  }
+  return current
 }

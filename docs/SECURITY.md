@@ -9,12 +9,13 @@ Tài liệu này mô tả mô hình bảo mật, các biện pháp đã triển 
 3. **Máy local** — không bị RCE, path traversal hoặc ghi file ngoài ý muốn từ dữ liệu server/QR.
 4. **Dữ liệu trên server** — không bị xoá/ghi nhầm ngoài thao tác người dùng xác nhận.
 
-## 2. Những gì KHÔNG được lưu
+## 2. Những gì được lưu (và không lưu)
 
-- Không lưu mật khẩu, passphrase, private key.
+- Mặc định **không lưu** mật khẩu/passphrase; chúng chỉ nằm trong RAM khi kết nối.
+- Người dùng có thể **tự bật** lưu secret cho từng profile. Khi đó secret được mã hoá bằng Electron `safeStorage`: Windows DPAPI hoặc macOS Keychain. App không bao giờ lưu plaintext và không lưu private key.
 - Không lưu nội dung file, không log tên file / đường dẫn / lỗi có chứa secret.
 - Không telemetry, không crash reporter.
-- Không có keychain/credential vault vì không có secret cần lưu.
+- Không có keychain/credential vault tự viết; chỉ dùng OS vault có sẵn và chỉ khi người dùng chọn.
 
 ### Auto-update
 
@@ -22,7 +23,7 @@ Tài liệu này mô tả mô hình bảo mật, các biện pháp đã triển 
 - URL feed được đóng gói trong `app-update.yml`; renderer không thể thay đổi feed.
 - `electron-updater` xác minh SHA-512 của gói tải về từ `latest.yml` / `latest-mac.yml` trước khi cài.
 - Không nhúng GitHub token vào app; repo là public.
-- **Windows chưa ký số**: installer không được xác thực publisher, nên bảo vệ yếu hơn bản ký số. Muốn chắc chắn, cấu hình code signing.
+- **Windows chưa ký số**: installer không được xác thực publisher, nên bảo vệ yếu hơn bản ký số. Vì vậy bản chưa ký **không tự cài khi thoát app**; người dùng phải bấm cài. Muốn chắc chắn, cấu hình code signing.
 - **macOS chưa ký số**: app không bật auto-install; người dùng tải DMG thủ công. macOS yêu cầu chữ ký Developer ID + notarization để Squirrel.Mac cài cập nhật.
 - Auto-check chạy sau ~12 giây khi app packaged và có thể kiểm tra thủ công trong Settings.
 
@@ -30,9 +31,12 @@ Chỉ lưu:
 
 | File | Nội dung | Quyền |
 |---|---|---|
-| `profiles.json` | `id`, `name`, `host`, `port`, `username`, timestamps | `0600` (Windows: ACL kế thừa user profile) |
+| `profiles.json` | `id`, `name`, `host`, `port`, `username`, `authMethod`, `keyPath`, timestamps | `0600` (Windows: ACL kế thừa user profile) |
 | `known_hosts.json` | `host:port`, key type, fingerprint SHA-256, `firstSeen` | `0600` |
 | `settings.json` | `locale` | `0600` |
+| `bookmarks.json` | `profileId`, đường dẫn remote, tên hiển thị | `0600` |
+| `window.json` | kích thước/vị trí cửa sổ | `0600` |
+| `secrets.json` | blob secret đã mã hoá bởi OS vault (chỉ khi người dùng bật lưu) | `0600` |
 
 Ghi file theo kiểu atomic (`temp` + `rename`), tạo với `wx` để tránh ghi đè ngoài ý muốn. File hỏng được đổi tên thành `.corrupt-<timestamp>` thay vì ghi đè dữ liệu cũ.
 
@@ -42,9 +46,19 @@ Ghi file theo kiểu atomic (`temp` + `rename`), tạo với `wx` để tránh g
 - Pin theo `host:port`, host được lower-case / IDNA-normalize.
 - **Lần đầu**: hiển thị key type + fingerprint, yêu cầu người dùng chấp nhận (timeout 60 giây).
 - **Lần sau**: tự động chấp nhận nếu fingerprint khớp.
-- **Mismatch**: **huỷ kết nối ngay**, không có nút "vẫn kết nối" trong luồng. Muốn kết nối lại phải vào Settings → xoá pin (kèm giải thích MITM).
+- **Mismatch**: **huỷ kết nối ngay**, hiển thị dialog cảnh báo với cả fingerprint đã lưu và fingerprint nhận được; không có nút "vẫn kết nối". Muốn kết nối lại phải vào Settings → xoá pin (kèm giải thích MITM).
 - Chỉ lưu pin sau khi người dùng chấp nhận.
 - Kết nối chỉ mở **SFTP subsystem**; không mở shell/exec, không agent forwarding, không port forwarding, không jump host.
+- Hỗ trợ **SSH private key** (OpenSSH/PEM). Key file được đọc trong main process; nội dung key không đi qua IPC/renderer. Passphrase được hỏi khi cần và chỉ lưu nếu người dùng bật OS vault.
+- Khi xoá profile hoặc đổi auth method/key path, secret đã lưu của profile đó bị xoá.
+- **Thuật toán hiện đại bắt buộc**: chỉ cho phép curve25519/ECDH/group14–18 SHA-256+, AES-GCM/CTR/ChaCha20-Poly1305, HMAC-SHA-2 (ưu tiên EtM), host key Ed25519/ECDSA/RSA-SHA-2. Từ chối `ssh-rsa` (SHA-1), `ssh-dss`, `hmac-sha1`, CBC, `group1-sha1`. Server chỉ hỗ trợ thuật toán cũ sẽ bị chặn với lỗi `ALGORITHM_UNSUPPORTED`.
+
+### Lưu trữ known_hosts
+
+- File có `version` và mảng `hosts`; vẫn đọc được định dạng mảng cũ.
+- Entry hỏng được bỏ qua, các entry hợp lệ được giữ và file được sửa lại; một bản copy `.corrupt-<timestamp>` được giữ.
+- File hỏng hoàn toàn được backup rồi khởi tạo rỗng.
+- Settings hiển thị cảnh báo khi pin bị mất một phần hoặc toàn bộ để người dùng xác minh lại fingerprint.
 
 ### Giới hạn TOFU
 
@@ -67,6 +81,7 @@ Lần kết nối đầu tiên vẫn có thể bị MITM nếu kẻ tấn công 
 - CSP production:
   `default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; connect-src 'none'; base-uri 'none'; form-action 'none'`
 - `style-src 'unsafe-inline'` chỉ để React đặt style tiến trình; không có `script-src 'unsafe-inline'`.
+- CSP production được đặt cả bằng meta và HTTP header khi packaged; `frame-ancestors 'none'` chỉ có trong header (meta bỏ qua directive này).
 - Renderer **không có network**: `connect-src 'none'`; mọi kết nối mạng nằm ở main process.
 - Từ chối mọi `permission request` / `permission check` (camera, mic, geolocation, notification, clipboard-read…).
 - Chặn `will-navigate`, `will-redirect`, `window.open`, `webview` attach.
@@ -89,6 +104,7 @@ Lần kết nối đầu tiên vẫn có thể bị MITM nếu kẻ tấn công 
 Tên file remote do server kiểm soát, được xử lý trước khi dùng làm đường dẫn local:
 
 - Bỏ mọi thành phần thư mục (`/`, `\`), chỉ giữ basename.
+- Bỏ ký tự điều khiển bidi/zero-width (U+202A–202E, U+2066–2069, U+200B–200F, U+FEFF…) để chống giả mạo phần mở rộng file; UI hiển thị ký tự thay thế `�` nếu tên chứa ký tự này.
 - Thay ký tự điều khiển và `< > : " | ? *` bằng `_`.
 - Bỏ dấu chấm / khoảng trắng cuối (Windows).
 - Chặn reserved names: `CON`, `PRN`, `AUX`, `NUL`, `COM1-9`, `LPT1-9` (kể cả có extension).
@@ -102,7 +118,8 @@ Upload ghi temp trên server rồi `rename` khi xong.
 ## 8. Giới hạn tài nguyên
 
 - Tối đa 10.000 entry mỗi lần list; quá → báo lỗi, không treo UI.
-- Tối đa 2 transfer chạy song song; hàng đợi 50.
+- Tối đa 2 transfer chạy song song; hàng đợi 2.000; cây thư mục tối đa 5.000 mục / 32 cấp.
+- Resume chỉ dùng lại file tạm khi kích thước/mtime của nguồn không đổi; nếu khác, transfer bắt đầu lại từ đầu.
 - Đệ quy xoá sâu tối đa 32 cấp, tối đa 10.000 mục.
 - Path remote ≤ 4096 ký tự; tên ≤ 255.
 - Keyboard-interactive: tối đa 8 vòng / 16 prompt; timeout 90 giây.
@@ -111,6 +128,7 @@ Upload ghi temp trên server rồi `rename` khi xong.
 ## 9. Những gì không bảo vệ
 
 - **Máy local đã bị compromise**: kẻ tấn công có thể đọc RAM/process, keylog, hoặc sửa file cấu hình. Không có phần mềm nào chống được điều này.
+- **OS vault đã bị compromise**: nếu malware chạy được dưới user hiện tại và OS vault đang mở khoá, secret đã lưu có thể bị giải mã. Đây là lý do tính năng lưu secret là opt-in.
 - **Server độc hại**: app chỉ bảo vệ kênh và thao tác local; nội dung file tải về là dữ liệu không tin cậy — không tự mở/exec.
 - **TOFU lần đầu** như trên.
 - **Build chưa ký số**: có thể bị cảnh báo SmartScreen/Gatekeeper; không chống được malware thay thế installer nếu tải từ nguồn không tin cậy.

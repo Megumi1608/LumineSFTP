@@ -991,6 +991,25 @@ select:focus-visible {
   white-space: nowrap;
 }
 
+.selection-bar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--paper);
+}
+
+.selection-count {
+  margin-right: auto;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--ink);
+}
+
 .file-head,
 .file-row {
   display: grid;
@@ -1407,6 +1426,30 @@ select:focus-visible {
   gap: 12px;
 }
 
+.field-row > .grow {
+  flex: 1;
+  min-width: 0;
+}
+
+.field.checkbox-field {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+}
+
+.field.checkbox-field input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  padding: 0;
+  flex: 0 0 auto;
+}
+
+.field.checkbox-field > span {
+  font-size: 13px;
+  color: var(--ink);
+}
+
 .field.grow {
   flex: 1;
 }
@@ -1821,4 +1864,113 @@ select:focus-visible {
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
   }
+}
+
+/* ---------- file tools, bookmarks, properties ---------- */
+
+.file-tools {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 0;
+}
+
+.filter-input {
+  flex: 1;
+  min-width: 0;
+  height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--paper-bright);
+  color: var(--ink);
+  font-size: 13px;
+  outline: none;
+}
+
+.filter-input:focus {
+  border-color: var(--ink);
+}
+
+.head-sort {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  color: inherit;
+  font: inherit;
+  letter-spacing: inherit;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.head-sort.num {
+  justify-content: flex-end;
+}
+
+.file-head,
+.file-row {
+  grid-template-columns: minmax(0, 1fr) 92px 150px 128px;
+}
+
+.file-actions {
+  gap: 0;
+}
+
+.bookmark-count {
+  display: inline-grid;
+  place-items: center;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 3px;
+  border-radius: 8px;
+  background: var(--ink);
+  color: #ffffff;
+  font-size: 9.5px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.bookmark-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.bookmark-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 4px;
+  border-bottom: 1px solid var(--rule);
+}
+
+.bookmark-icon {
+  flex: 0 0 auto;
+  color: var(--ink);
+}
+
+.bookmark-copy {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.bookmark-copy strong {
+  font-size: 13px;
+  color: var(--ink);
+}
+
+.bookmark-copy code {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-identifiers);
+  font-size: 11.5px;
+  color: var(--muted);
 }

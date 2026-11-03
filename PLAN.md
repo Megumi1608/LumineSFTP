@@ -1,7 +1,7 @@
 # Lumine SFTP — Kế hoạch triển khai
 
 > SFTP client desktop tối giản cho Windows & macOS, nhập cấu hình kết nối bằng mã QR.
-> Trạng thái: **Đã triển khai v0.1.3** — logo LumineCloud; UI mono trắng–đen; auto-update qua GitHub Releases. Build và upload thủ công, không dùng CI.
+> Trạng thái: **Đã triển khai v0.2.0** — thêm SSH key auth, OS vault opt-in, multi-select/folder transfer/resume, sort/filter/bookmark/history, chmod và window state. Logo LumineCloud; UI mono trắng–đen; auto-update qua GitHub Releases. Build và upload thủ công, không dùng CI.
 
 ---
 
@@ -427,9 +427,8 @@ trước, Phase 5–6 cần build/QA thực tế.
 
 ## 13. Non-goals (không làm)
 
-Terminal/SSH shell · FTP/FTPS/S3/WebDAV · sync/thư mục local · SSH key auth ·
-port forwarding/jump host · lưu mật khẩu · quét camera ·
-telemetry · chỉnh sửa file remote · phân quyền/chmod · tìm kiếm remote ·
+Terminal/SSH shell · FTP/FTPS/S3/WebDAV · sync thư mục · port forwarding/jump host · proxy ·
+dual-pane · lưu plaintext · quét camera · telemetry · sửa file remote trực tiếp ·
 đa ngôn ngữ ngoài vi/en · Windows ARM.
 
 ---

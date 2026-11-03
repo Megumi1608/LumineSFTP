@@ -1,16 +1,6 @@
 import { defineConfig, externalizeDepsPlugin } from 'electron-vite'
 import react from '@vitejs/plugin-react'
-
-const PROD_CSP = [
-  "default-src 'none'",
-  "script-src 'self'",
-  "style-src 'self' 'unsafe-inline'",
-  "img-src 'self' data: blob:",
-  "font-src 'self'",
-  "connect-src 'none'",
-  "base-uri 'none'",
-  "form-action 'none'"
-].join('; ')
+import { PROD_CSP } from './src/shared/csp'
 
 const DEV_CSP = [
   "default-src 'self'",

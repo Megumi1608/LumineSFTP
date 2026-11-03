@@ -4,11 +4,13 @@ import path from 'node:path'
 import { Transform } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 import { posix } from 'node:path'
-import { Client, type FileEntryWithStats, type SFTPWrapper } from 'ssh2'
+import { Client, type Algorithms, type FileEntryWithStats, type SFTPWrapper } from 'ssh2'
 import type {
+  ConflictMode,
   ConnectionState,
   ConnectionStatus,
   ErrorCode,
+  HostKeyMismatchPrompt,
   HostKeyPrompt,
   InteractiveRequest,
   KnownHost,
@@ -20,7 +22,7 @@ import type {
   TransferState
 } from '../shared/types'
 import { AppError, mapError } from './errors'
-import { safeLocalTarget } from './local-path'
+import { safeLocalPath } from './local-path'
 
 export interface KnownHostLookup {
   getKnownHost(host: string, port: number): KnownHost | null
@@ -35,6 +37,7 @@ export interface KnownHostLookup {
 export interface SessionEvents {
   status(status: ConnectionStatus): void
   hostKey(prompt: HostKeyPrompt): void
+  hostKeyMismatch(prompt: HostKeyMismatchPrompt): void
   interactive(request: InteractiveRequest): void
   transfer(info: TransferInfo): void
 }
@@ -72,13 +75,70 @@ interface TransferRecord extends TransferInfo {
   remotePath: string
   overwrite: boolean
   lastEmit: number
+  lastBytes: number
   tempPath?: string
+  remoteSize?: number
+  remoteMtime?: number
+  localSize?: number
+  localMtime?: number
+  resume: boolean
+}
+
+interface TransferPlan {
+  name: string
+  localPath: string
+  remotePath: string
+  total: number
+  remoteSize?: number
+  remoteMtime?: number
+  localSize?: number
+  localMtime?: number
 }
 
 const MAX_LIST_ENTRIES = 10_000
-const MAX_QUEUE = 50
+const MAX_QUEUE = 2000
 const MAX_TRANSFERS_KEPT = 100
 const TRANSFER_CONCURRENCY = 2
+const DELETE_PREVIEW_LIMIT = 500
+const MAX_TREE_ITEMS = 5000
+const MAX_TREE_DEPTH = 32
+
+// Legacy SHA-1 algorithms (ssh-rsa, hmac-sha1, group1/14-sha1, CBC) are
+// deliberately excluded so a downgrade cannot be negotiated with this app.
+export const SECURE_ALGORITHMS: Algorithms = {
+  kex: [
+    'curve25519-sha256',
+    'curve25519-sha256@libssh.org',
+    'ecdh-sha2-nistp256',
+    'ecdh-sha2-nistp384',
+    'ecdh-sha2-nistp521',
+    'diffie-hellman-group16-sha512',
+    'diffie-hellman-group18-sha512',
+    'diffie-hellman-group14-sha256'
+  ],
+  cipher: [
+    'aes256-gcm@openssh.com',
+    'aes128-gcm@openssh.com',
+    'aes256-ctr',
+    'aes192-ctr',
+    'aes128-ctr'
+  ],
+  serverHostKey: [
+    'ssh-ed25519',
+    'ecdsa-sha2-nistp256',
+    'ecdsa-sha2-nistp384',
+    'ecdsa-sha2-nistp521',
+    'rsa-sha2-512',
+    'rsa-sha2-256'
+  ],
+  hmac: [
+    'hmac-sha2-256-etm@openssh.com',
+    'hmac-sha2-512-etm@openssh.com',
+    'hmac-sha2-256',
+    'hmac-sha2-512'
+  ],
+  compress: ['none', 'zlib@openssh.com']
+}
 
 function valueCall<T>(
   invoke: (callback: (error: Error | null | undefined, value: T) => void) => void
@@ -119,6 +179,22 @@ function isNoSuchFile(error: unknown): boolean {
   return sftpStatus(error) === 2 || (error as { code?: unknown } | null)?.code === 'ENOENT'
 }
 
+function isAlreadyExists(error: unknown): boolean {
+  return sftpStatus(error) === 11 || (error as { code?: unknown } | null)?.code === 'EEXIST'
+}
+
+function isUnsupportedOperation(error: unknown): boolean {
+  if (sftpStatus(error) === 8) return true
+  const message = (error as { message?: unknown } | null)?.message
+  return typeof message === 'string' && /not supported|unsupported/i.test(message)
+}
+
+export interface ConnectAuth {
+  password?: string
+  privateKey?: Buffer | string
+  passphrase?: string
+}
+
 export class SftpSession {
   private readonly client = new Client()
   private sftp?: SFTPWrapper
@@ -137,8 +213,13 @@ export class SftpSession {
     private readonly options: SessionOptions
   ) {}
 
-  connect(password: string): Promise<void> {
+  connect(auth: ConnectAuth | string): Promise<void> {
     if (this.disposed) return Promise.reject(new AppError('INTERNAL', 'session disposed'))
+
+    const credentials: ConnectAuth = typeof auth === 'string' ? { password: auth } : auth
+    if (!credentials.password && !credentials.privateKey) {
+      return Promise.reject(new AppError('SECRET_REQUIRED'))
+    }
 
     this.emitStatus('connecting')
 
@@ -243,12 +324,17 @@ export class SftpSession {
         host: this.profile.host,
         port: this.profile.port,
         username: this.profile.username,
-        password,
+        password: credentials.password,
+        privateKey: credentials.privateKey,
+        passphrase: credentials.passphrase,
         readyTimeout: 30_000,
         keepaliveInterval: 15_000,
         keepaliveCountMax: 3,
         tryKeyboard: true,
-        authHandler: ['password', 'keyboard-interactive'],
+        authHandler: credentials.privateKey
+          ? ['publickey', 'keyboard-interactive']
+          : ['password', 'keyboard-interactive'],
+        algorithms: SECURE_ALGORITHMS,
         hostVerifier: (key: Buffer, callback: (accept: boolean) => void) => {
           this.verifyHostKey(key, callback)
         }
@@ -279,6 +365,14 @@ export class SftpSession {
           'HOST_KEY_MISMATCH',
           `expected ${known.fingerprint}; received ${fingerprint}`
         )
+        this.options.events.hostKeyMismatch({
+          host: this.profile.host,
+          port: this.profile.port,
+          keyType,
+          expectedKeyType: known.keyType,
+          expectedFingerprint: known.fingerprint,
+          receivedFingerprint: fingerprint
+        })
         callback(false)
         return
       }
@@ -382,7 +476,10 @@ export class SftpSession {
               ? 'link'
               : 'other',
         size: entry.attrs.size,
-        modified: entry.attrs.mtime
+        modified: entry.attrs.mtime,
+        mode: entry.attrs.mode ?? 0,
+        uid: entry.attrs.uid ?? 0,
+        gid: entry.attrs.gid ?? 0
       }))
 
     mapped.sort((left, right) => {
@@ -420,6 +517,50 @@ export class SftpSession {
     await this.removeRecursive(sftp, remote, 0, counter)
   }
 
+  async describeDelete(
+    target: string
+  ): Promise<{ directory: boolean; items: number; truncated: boolean }> {
+    const sftp = this.requireSftp()
+    const remote = this.requirePath(target)
+    const stats = await this.lstat(remote)
+    if (!stats.isDirectory()) return { directory: false, items: 0, truncated: false }
+    const counter = { value: 0, truncated: false }
+    await this.countTree(sftp, remote, 0, counter)
+    return { directory: true, items: counter.value, truncated: counter.truncated }
+  }
+
+  private async countTree(
+    sftp: SFTPWrapper,
+    target: string,
+    depth: number,
+    counter: { value: number; truncated: boolean }
+  ): Promise<void> {
+    if (counter.value >= DELETE_PREVIEW_LIMIT || depth > 32) {
+      counter.truncated = true
+      return
+    }
+    let entries: FileEntryWithStats[]
+    try {
+      entries = await valueCall<FileEntryWithStats[]>((callback) =>
+        sftp.readdir(target, callback)
+      )
+    } catch {
+      counter.truncated = true
+      return
+    }
+    for (const entry of entries) {
+      if (entry.filename === '.' || entry.filename === '..') continue
+      if (counter.value >= DELETE_PREVIEW_LIMIT) {
+        counter.truncated = true
+        return
+      }
+      counter.value += 1
+      if (entry.attrs.isDirectory()) {
+        await this.countTree(sftp, posix.join(target, entry.filename), depth + 1, counter)
+      }
+    }
+  }
+
   private async removeRecursive(
     sftp: SFTPWrapper,
     target: string,
@@ -450,76 +591,256 @@ export class SftpSession {
     await doneCall((callback) => sftp.unlink(target, callback))
   }
 
-  async upload(files: string[], directory: string, overwrite: boolean): Promise<number> {
+  async upload(paths: string[], directory: string, mode: ConflictMode): Promise<number> {
     const sftp = this.requireSftp()
     const remoteDir = this.requirePath(directory)
-    if (files.length === 0) throw new AppError('DIALOG_CANCELLED')
+    if (paths.length === 0) throw new AppError('DIALOG_CANCELLED')
     if (this.queue.length + this.running >= MAX_QUEUE) {
       throw new AppError('TRANSFER_FAILED', 'queue full')
     }
 
-    const prepared: Array<{ localPath: string; remotePath: string; size: number; name: string }> = []
+    const files: TransferPlan[] = []
+    const counter = { value: 0 }
+    for (const localPath of paths) {
+      await this.collectUpload(sftp, localPath, remoteDir, files, 0, counter)
+    }
+    if (files.length === 0) return 0
+
+    const conflicts: string[] = []
+    const planned: Array<TransferPlan & { overwrite: boolean }> = []
     for (const file of files) {
-      const stats = fs.statSync(file)
-      if (!stats.isFile()) throw new AppError('INVALID_INPUT', path.basename(file))
-      const name = path.basename(file)
-      if (!validRemoteName(name)) throw new AppError('INVALID_NAME', name)
-      const remotePath = posix.join(remoteDir, name)
-      if (!overwrite && (await this.remoteExists(remotePath))) {
-        throw new AppError('ALREADY_EXISTS', name)
+      const exists = await this.remoteExists(file.remotePath)
+      if (!exists) {
+        planned.push({ ...file, overwrite: false })
+        continue
       }
-      prepared.push({ localPath: file, remotePath, size: stats.size, name })
+      if (mode === 'error') {
+        conflicts.push(file.name)
+        continue
+      }
+      if (mode === 'skip') continue
+      if (mode === 'overwrite') {
+        planned.push({ ...file, overwrite: true })
+        continue
+      }
+      const renamed = await this.uniqueRemoteName(file.remotePath)
+      planned.push({
+        ...file,
+        name: posix.basename(renamed),
+        remotePath: renamed,
+        overwrite: false
+      })
     }
 
-    for (const item of prepared) {
+    if (conflicts.length > 0) {
+      throw new AppError('ALREADY_EXISTS', conflicts.slice(0, 20).join('\n'))
+    }
+    for (const item of planned) {
       this.enqueue({
         direction: 'upload',
         name: item.name,
         localPath: item.localPath,
         remotePath: item.remotePath,
-        total: item.size,
-        overwrite
+        total: item.total,
+        overwrite: item.overwrite,
+        ...(item.localSize !== undefined ? { localSize: item.localSize } : {}),
+        ...(item.localMtime !== undefined ? { localMtime: item.localMtime } : {})
       })
     }
-    return prepared.length
+    return planned.length
+  }
+
+  private async collectUpload(
+    sftp: SFTPWrapper,
+    localPath: string,
+    remoteDir: string,
+    out: TransferPlan[],
+    depth: number,
+    counter: { value: number }
+  ): Promise<void> {
+    counter.value += 1
+    if (counter.value > MAX_TREE_ITEMS || depth > MAX_TREE_DEPTH) {
+      throw new AppError('LIST_TOO_LARGE', localPath)
+    }
+    const stats = fs.lstatSync(localPath)
+    if (stats.isSymbolicLink()) return
+    const name = path.basename(localPath)
+    if (!validRemoteName(name)) throw new AppError('INVALID_NAME', name)
+    const remotePath = posix.join(remoteDir, name)
+
+    if (stats.isDirectory()) {
+      try {
+        await doneCall((callback) => sftp.mkdir(remotePath, callback))
+      } catch (error) {
+        if (!isAlreadyExists(error)) throw error
+      }
+      for (const child of fs.readdirSync(localPath)) {
+        await this.collectUpload(sftp, path.join(localPath, child), remotePath, out, depth + 1, counter)
+      }
+      return
+    }
+    if (!stats.isFile()) return
+    if (out.length >= MAX_QUEUE) throw new AppError('TRANSFER_FAILED', 'queue full')
+    out.push({
+      name,
+      localPath,
+      remotePath,
+      total: stats.size,
+      localSize: stats.size,
+      localMtime: stats.mtimeMs
+    })
   }
 
   async download(
-    remotePath: string,
+    paths: string[],
     localDirectory: string,
-    overwrite: boolean
+    mode: ConflictMode
   ): Promise<number> {
     this.requireSftp()
-    const remote = this.requirePath(remotePath)
-    const stats = await this.lstat(remote)
-    if (stats.isDirectory()) throw new AppError('INVALID_PATH', remote)
+    if (paths.length === 0) throw new AppError('DIALOG_CANCELLED')
     if (!fs.statSync(localDirectory).isDirectory()) {
       throw new AppError('INVALID_PATH', localDirectory)
     }
 
-    const name = posix.basename(remote)
+    const files: TransferPlan[] = []
+    const counter = { value: 0 }
+    for (const remotePath of paths) {
+      await this.collectDownload(
+        this.requirePath(remotePath),
+        localDirectory,
+        [],
+        files,
+        0,
+        counter
+      )
+    }
+    if (files.length === 0) return 0
+
+    const conflicts: string[] = []
+    const planned: Array<TransferPlan & { overwrite: boolean }> = []
+    for (const file of files) {
+      if (!fs.existsSync(file.localPath)) {
+        planned.push({ ...file, overwrite: false })
+        continue
+      }
+      if (mode === 'error') {
+        conflicts.push(file.name)
+        continue
+      }
+      if (mode === 'skip') continue
+      if (mode === 'overwrite') {
+        planned.push({ ...file, overwrite: true })
+        continue
+      }
+      const renamed = this.uniqueLocalName(file.localPath)
+      planned.push({
+        ...file,
+        name: path.basename(renamed),
+        localPath: renamed,
+        overwrite: false
+      })
+    }
+
+    if (conflicts.length > 0) {
+      throw new AppError('ALREADY_EXISTS', conflicts.slice(0, 20).join('\n'))
+    }
+    for (const item of planned) {
+      this.enqueue({
+        direction: 'download',
+        name: item.name,
+        localPath: item.localPath,
+        remotePath: item.remotePath,
+        total: item.total,
+        overwrite: item.overwrite,
+        ...(item.remoteSize !== undefined ? { remoteSize: item.remoteSize } : {}),
+        ...(item.remoteMtime !== undefined ? { remoteMtime: item.remoteMtime } : {})
+      })
+    }
+    return planned.length
+  }
+
+  private async collectDownload(
+    remotePath: string,
+    root: string,
+    segments: string[],
+    out: TransferPlan[],
+    depth: number,
+    counter: { value: number }
+  ): Promise<void> {
+    counter.value += 1
+    if (counter.value > MAX_TREE_ITEMS || depth > MAX_TREE_DEPTH) {
+      throw new AppError('LIST_TOO_LARGE', remotePath)
+    }
+    const stats = await this.lstat(remotePath)
+    if (stats.isSymbolicLink()) return
+    const name = posix.basename(remotePath)
     if (!validRemoteName(name)) throw new AppError('INVALID_NAME', name)
 
+    if (stats.isDirectory()) {
+      let directory: string
+      try {
+        directory = safeLocalPath(root, [...segments, name])
+      } catch {
+        throw new AppError('INVALID_PATH', name)
+      }
+      fs.mkdirSync(directory, { recursive: true, mode: 0o700 })
+      const entries = await valueCall<FileEntryWithStats[]>((callback) =>
+        this.requireSftp().readdir(remotePath, callback)
+      )
+      for (const entry of entries) {
+        if (entry.filename === '.' || entry.filename === '..') continue
+        if (entry.attrs.isSymbolicLink()) continue
+        await this.collectDownload(
+          posix.join(remotePath, entry.filename),
+          root,
+          [...segments, name],
+          out,
+          depth + 1,
+          counter
+        )
+      }
+      return
+    }
+    if (!stats.isFile()) return
+    if (out.length >= MAX_QUEUE) throw new AppError('TRANSFER_FAILED', 'queue full')
     let localPath: string
     try {
-      localPath = safeLocalTarget(localDirectory, name)
+      localPath = safeLocalPath(root, [...segments, name])
     } catch {
       throw new AppError('INVALID_PATH', name)
     }
-
-    if (!overwrite && fs.existsSync(localPath)) {
-      throw new AppError('ALREADY_EXISTS', name)
-    }
-
-    this.enqueue({
-      direction: 'download',
+    out.push({
       name,
       localPath,
-      remotePath: remote,
+      remotePath,
       total: Math.max(0, stats.size),
-      overwrite
+      remoteSize: stats.size,
+      remoteMtime: stats.mtime
     })
-    return 1
+  }
+
+  private async uniqueRemoteName(remotePath: string): Promise<string> {
+    const directory = posix.dirname(remotePath)
+    const base = posix.basename(remotePath)
+    const extension = posix.extname(base)
+    const stem = extension ? base.slice(0, -extension.length) : base
+    for (let index = 1; index <= 99; index += 1) {
+      const candidate = posix.join(directory, `${stem} (${index})${extension}`)
+      if (!(await this.remoteExists(candidate))) return candidate
+    }
+    throw new AppError('ALREADY_EXISTS', base)
+  }
+
+  private uniqueLocalName(localPath: string): string {
+    const directory = path.dirname(localPath)
+    const base = path.basename(localPath)
+    const extension = path.extname(base)
+    const stem = extension ? base.slice(0, -extension.length) : base
+    for (let index = 1; index <= 99; index += 1) {
+      const candidate = path.join(directory, `${stem} (${index})${extension}`)
+      if (!fs.existsSync(candidate)) return candidate
+    }
+    throw new AppError('ALREADY_EXISTS', base)
   }
 
   cancelTransfer(id: string): void {
@@ -528,10 +849,40 @@ export class SftpSession {
     if (record.state === 'queued') {
       this.queue = this.queue.filter((item) => item.id !== id)
       record.state = 'cancelled'
+      record.canRetry = false
       this.emitTransfer(record)
       return
     }
     if (record.state === 'running') record.controller.abort()
+  }
+
+  retryTransfer(id: string): void {
+    const record = this.transfers.get(id)
+    if (!record || record.state !== 'error') throw new AppError('INVALID_INPUT', id)
+    if (this.queue.length + this.running >= MAX_QUEUE) {
+      throw new AppError('TRANSFER_FAILED', 'queue full')
+    }
+    record.state = 'queued'
+    record.code = undefined
+    record.canRetry = false
+    record.speed = undefined
+    record.eta = undefined
+    record.resume = true
+    record.controller = new AbortController()
+    this.queue.push(record)
+    this.emitTransfer(record)
+    this.pump()
+  }
+
+  getDownloadPath(id: string): string | null {
+    const record = this.transfers.get(id)
+    if (!record || record.direction !== 'download' || record.state !== 'done') return null
+    return record.localPath
+  }
+
+  async chmod(target: string, mode: number): Promise<void> {
+    const sftp = this.requireSftp()
+    await doneCall((callback) => sftp.chmod(this.requirePath(target), mode, callback))
   }
 
   private enqueue(input: {
@@ -541,6 +892,10 @@ export class SftpSession {
     remotePath: string
     total: number
     overwrite: boolean
+    remoteSize?: number
+    remoteMtime?: number
+    localSize?: number
+    localMtime?: number
   }): string {
     const id = randomUUID()
     const record: TransferRecord = {
@@ -554,7 +909,13 @@ export class SftpSession {
       localPath: input.localPath,
       remotePath: input.remotePath,
       overwrite: input.overwrite,
-      lastEmit: 0
+      lastEmit: Date.now(),
+      lastBytes: 0,
+      resume: false,
+      ...(input.remoteSize !== undefined ? { remoteSize: input.remoteSize } : {}),
+      ...(input.remoteMtime !== undefined ? { remoteMtime: input.remoteMtime } : {}),
+      ...(input.localSize !== undefined ? { localSize: input.localSize } : {}),
+      ...(input.localMtime !== undefined ? { localMtime: input.localMtime } : {})
     }
     this.transfers.set(id, record)
     this.queue.push(record)
@@ -593,52 +954,132 @@ export class SftpSession {
   }
 
   private async runTransfer(record: TransferRecord): Promise<void> {
-    const suffix = randomUUID().replace(/-/g, '').slice(0, 10)
     record.state = 'running'
+    record.code = undefined
+    record.speed = undefined
+    record.eta = undefined
     this.emitTransfer(record)
 
     try {
       if (record.direction === 'download') {
-        const temp = `${record.localPath}.lumine-${suffix}.part`
+        const sftp = this.requireSftp()
+        const temp = `${record.localPath}.lumine.part`
         record.tempPath = temp
-        const source = this.requireSftp().createReadStream(record.remotePath)
-        const destination = fs.createWriteStream(temp, { flags: 'wx', mode: 0o600 })
-        await pipeline(source, this.progress(record), destination, {
-          signal: record.controller.signal
-        })
-        if (record.overwrite) fs.rmSync(record.localPath, { force: true })
-        fs.renameSync(temp, record.localPath)
+        const current = await this.lstat(record.remotePath)
+        record.total = Math.max(0, current.size)
+
+        let offset = 0
+        if (
+          record.resume &&
+          record.remoteSize !== undefined &&
+          record.remoteMtime !== undefined &&
+          current.size === record.remoteSize &&
+          current.mtime === record.remoteMtime &&
+          fs.existsSync(temp)
+        ) {
+          const partial = fs.statSync(temp)
+          if (partial.size <= current.size) offset = partial.size
+        }
+
+        if (offset === 0) {
+          fs.rmSync(temp, { force: true })
+          record.transferred = 0
+        } else {
+          record.transferred = offset
+        }
+        record.lastEmit = Date.now()
+        record.lastBytes = record.transferred
+
+        if (offset === record.total && offset > 0) {
+          this.replaceLocalFile(temp, record.localPath)
+        } else {
+          const source = sftp.createReadStream(
+            record.remotePath,
+            offset > 0 ? { start: offset } : undefined
+          )
+          const destination = fs.createWriteStream(
+            temp,
+            offset > 0 ? { flags: 'a' } : { flags: 'wx', mode: 0o600 }
+          )
+          await pipeline(source, this.progress(record), destination, {
+            signal: record.controller.signal
+          })
+          this.replaceLocalFile(temp, record.localPath)
+        }
       } else {
         const sftp = this.requireSftp()
         const directory = posix.dirname(record.remotePath)
         const temp = posix.join(
           directory,
-          `.${posix.basename(record.remotePath)}.lumine-${suffix}.part`
+          `.${posix.basename(record.remotePath)}.lumine.part`
         )
         record.tempPath = temp
-        const source = fs.createReadStream(record.localPath)
-        const destination = sftp.createWriteStream(temp)
+        const local = fs.statSync(record.localPath)
+        record.total = local.size
+
+        let offset = 0
+        if (
+          record.resume &&
+          record.localSize !== undefined &&
+          record.localMtime !== undefined &&
+          local.size === record.localSize &&
+          local.mtimeMs === record.localMtime
+        ) {
+          try {
+            const partial = await valueCall<{ size: number }>((callback) =>
+              sftp.stat(temp, callback)
+            )
+            if (partial.size <= local.size) offset = partial.size
+          } catch (error) {
+            if (!isNoSuchFile(error)) throw error
+          }
+        }
+
+        if (!record.resume) await this.unlinkIfExists(sftp, temp)
+        record.transferred = offset
+        record.lastEmit = Date.now()
+        record.lastBytes = offset
+
+        const source = fs.createReadStream(
+          record.localPath,
+          offset > 0 ? { start: offset } : undefined
+        )
+        const destination = sftp.createWriteStream(
+          temp,
+          offset > 0 ? { flags: 'r+', start: offset } : { mode: 0o600 }
+        )
         const closed = this.waitForClose(destination)
         await pipeline(source, this.progress(record), destination, {
           signal: record.controller.signal
         })
         await closed
-        if (record.overwrite) await this.unlinkIfExists(sftp, record.remotePath)
-        await doneCall((callback) => sftp.rename(temp, record.remotePath, callback))
+        if (record.overwrite) {
+          await this.replaceRemoteFile(sftp, temp, record.remotePath)
+        } else {
+          await doneCall((callback) => sftp.rename(temp, record.remotePath, callback))
+        }
       }
 
       record.state = 'done'
       record.transferred = record.total
+      record.speed = undefined
+      record.eta = 0
+      record.canRetry = false
       record.tempPath = undefined
       this.emitTransfer(record)
     } catch (error) {
-      await this.cleanupTemp(record)
-      if (record.controller.signal.aborted) {
+      const aborted = record.controller.signal.aborted
+      await this.cleanupTemp(record, aborted)
+      if (aborted) {
         record.state = 'cancelled'
+        record.canRetry = false
       } else {
         record.state = 'error'
         record.code = mapError(error).code
+        record.canRetry = true
       }
+      record.speed = undefined
+      record.eta = undefined
       this.emitTransfer(record)
     }
   }
@@ -648,8 +1089,17 @@ export class SftpSession {
       transform: (chunk: Buffer, _encoding, callback) => {
         record.transferred += chunk.length
         const now = Date.now()
-        if (now - record.lastEmit >= 100) {
+        const elapsed = now - record.lastEmit
+        if (elapsed >= 100) {
+          const delta = record.transferred - record.lastBytes
+          const instant = delta / (elapsed / 1000)
+          record.speed = record.speed ? record.speed * 0.6 + instant * 0.4 : instant
+          record.eta =
+            record.speed > 0
+              ? Math.max(0, Math.round((record.total - record.transferred) / record.speed))
+              : undefined
           record.lastEmit = now
+          record.lastBytes = record.transferred
           this.emitTransfer(record)
         }
         callback(null, chunk)
@@ -672,10 +1122,44 @@ export class SftpSession {
     })
   }
 
-  private async cleanupTemp(record: TransferRecord): Promise<void> {
+  private replaceLocalFile(temp: string, target: string): void {
+    try {
+      fs.renameSync(temp, target)
+    } catch (error) {
+      const code = (error as { code?: unknown } | null)?.code
+      if (code !== 'EEXIST' && code !== 'EPERM' && code !== 'EACCES') throw error
+      fs.rmSync(target, { force: true })
+      fs.renameSync(temp, target)
+    }
+  }
+
+  private async replaceRemoteFile(
+    sftp: SFTPWrapper,
+    temp: string,
+    target: string
+  ): Promise<void> {
+    try {
+      await doneCall((callback) => sftp.ext_openssh_rename(temp, target, callback))
+      return
+    } catch (error) {
+      if (!isUnsupportedOperation(error)) throw error
+    }
+
+    try {
+      await doneCall((callback) => sftp.rename(temp, target, callback))
+      return
+    } catch (error) {
+      if (!isAlreadyExists(error)) throw error
+    }
+
+    await this.unlinkIfExists(sftp, target)
+    await doneCall((callback) => sftp.rename(temp, target, callback))
+  }
+
+  private async cleanupTemp(record: TransferRecord, remove: boolean): Promise<void> {
     const temp = record.tempPath
+    if (!remove || !temp) return
     record.tempPath = undefined
-    if (!temp) return
     if (record.direction === 'download') {
       try {
         fs.rmSync(temp, { force: true })
@@ -720,7 +1204,10 @@ export class SftpSession {
       transferred: record.transferred,
       total: record.total,
       state: record.state,
-      ...(record.code ? { code: record.code } : {})
+      ...(record.code ? { code: record.code } : {}),
+      ...(record.speed !== undefined ? { speed: record.speed } : {}),
+      ...(record.eta !== undefined ? { eta: record.eta } : {}),
+      ...(record.state === 'error' ? { canRetry: true } : {})
     })
   }
 

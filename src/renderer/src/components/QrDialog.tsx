@@ -90,7 +90,9 @@ export function QrDialog({
       name: preview.name ?? preview.host,
       host: preview.host,
       port: preview.port,
-      username: preview.username
+      username: preview.username,
+      authMethod: 'password',
+      keyPath: null
     })
     setBusy(false)
     if (!result.ok) {

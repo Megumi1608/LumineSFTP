@@ -1,5 +1,12 @@
 import { validateQrObject, type QrError } from './qr'
-import type { ErrorCode, Locale, ProfileInput } from './types'
+import type {
+  AuthMethod,
+  ConflictMode,
+  ConnectSecret,
+  ErrorCode,
+  Locale,
+  ProfileInput
+} from './types'
 
 export class ContractError extends Error {
   readonly code: ErrorCode = 'INVALID_INPUT'
@@ -44,7 +51,7 @@ export function assertLocale(value: unknown): Locale {
 
 export function assertProfileSave(value: unknown): ProfileInput & { id?: string } {
   const record = asRecord(value)
-  const allowed = new Set(['id', 'host', 'port', 'username', 'name'])
+  const allowed = new Set(['id', 'host', 'port', 'username', 'name', 'authMethod', 'keyPath'])
   for (const key of Object.keys(record)) {
     if (!allowed.has(key)) throw new ContractError(`field:${key}`)
   }
@@ -58,13 +65,46 @@ export function assertProfileSave(value: unknown): ProfileInput & { id?: string 
   if (!parsed.ok) qrErrorToContract(parsed.error)
 
   const id = record.id === undefined ? undefined : assertId(record.id)
+  const authMethod: AuthMethod =
+    record.authMethod === undefined ? 'password' : assertAuthMethod(record.authMethod)
+  let keyPath: string | null = null
+  if (authMethod === 'key') {
+    keyPath = text(record.keyPath, 4096, 'keyPath')
+    if (/[\u0000\r\n]/.test(keyPath)) throw new ContractError('keyPath')
+  } else if (record.keyPath !== undefined && record.keyPath !== null) {
+    throw new ContractError('keyPath')
+  }
+
   return {
     ...(id ? { id } : {}),
     name: parsed.value.name ?? parsed.value.host,
     host: parsed.value.host,
     port: parsed.value.port,
-    username: parsed.value.username
+    username: parsed.value.username,
+    authMethod,
+    keyPath
   }
+}
+
+export function assertAuthMethod(value: unknown): AuthMethod {
+  if (value !== 'password' && value !== 'key') throw new ContractError('authMethod')
+  return value
+}
+
+export function assertConnectSecret(value: unknown): ConnectSecret {
+  const record = asRecord(value)
+  const allowed = new Set(['password', 'passphrase', 'saveSecret'])
+  for (const key of Object.keys(record)) {
+    if (!allowed.has(key)) throw new ContractError(`field:${key}`)
+  }
+  const secret: ConnectSecret = {}
+  if (record.password !== undefined) secret.password = assertPassword(record.password)
+  if (record.passphrase !== undefined) secret.passphrase = assertPassword(record.passphrase)
+  if (record.saveSecret !== undefined) {
+    if (typeof record.saveSecret !== 'boolean') throw new ContractError('saveSecret')
+    secret.saveSecret = record.saveSecret
+  }
+  return secret
 }
 
 export function assertPassword(value: unknown): string {
@@ -77,6 +117,27 @@ export function assertRemotePath(value: unknown): string {
   const path = text(value, 4096, 'path')
   if (/[\u0000\r\n]/.test(path)) throw new ContractError('path')
   return path
+}
+
+export function assertRemotePaths(value: unknown): string[] {
+  if (!Array.isArray(value) || value.length === 0 || value.length > 500) {
+    throw new ContractError('paths')
+  }
+  return value.map((path) => assertRemotePath(path))
+}
+
+export function assertConflictMode(value: unknown): ConflictMode {
+  if (value !== 'error' && value !== 'overwrite' && value !== 'skip' && value !== 'rename') {
+    throw new ContractError('conflict')
+  }
+  return value
+}
+
+export function assertMode(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 0 || value > 0o7777) {
+    throw new ContractError('mode')
+  }
+  return value
 }
 
 export function assertRemoteName(value: unknown): string {

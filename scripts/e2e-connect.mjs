@@ -54,9 +54,7 @@ const wrongMessage = await page.locator('.toast-error').first().innerText()
 console.log('wrong password message:', wrongMessage.replace(/\n/g, ' '))
 if (!wrongMessage.includes('Sai mật khẩu')) throw new Error('wrong password was not reported')
 
-// Correct password (host key is now pinned, so no prompt).
-await page.getByRole('button', { name: 'Kết nối', exact: true }).click()
-await page.waitForSelector('.modal input[type=password]')
+// Correct password (the dialog stays open after a failed attempt).
 await page.locator('.modal input[type=password]').fill('testpass')
 await page.getByRole('button', { name: 'Đăng nhập' }).click()
 

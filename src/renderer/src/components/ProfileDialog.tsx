@@ -1,6 +1,6 @@
 import { useState, type FormEvent, type ReactNode } from 'react'
 import { qrErrorMessages, validateQrObject } from '../../../shared/qr'
-import type { Locale, Profile } from '../../../shared/types'
+import type { AuthMethod, Locale, Profile } from '../../../shared/types'
 import { errorText, translate } from '../i18n'
 import { Modal } from './Modal'
 
@@ -23,12 +23,31 @@ export function ProfileDialog({
   const [host, setHost] = useState(profile?.host ?? '')
   const [port, setPort] = useState(String(profile?.port ?? 22))
   const [username, setUsername] = useState(profile?.username ?? '')
+  const [authMethod, setAuthMethod] = useState<AuthMethod>(profile?.authMethod ?? 'password')
+  const [keyPath, setKeyPath] = useState(profile?.keyPath ?? '')
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+
+  const pickKey = async (): Promise<void> => {
+    setError(null)
+    const result = await window.lumine.profiles.pickKey()
+    if (result.ok) {
+      if (result.data) setKeyPath(result.data)
+      return
+    }
+    if (result.code !== 'DIALOG_CANCELLED') {
+      setError(errorText(locale, result.code, result.detail))
+    }
+  }
 
   const submit = async (event: FormEvent): Promise<void> => {
     event.preventDefault()
     setError(null)
+
+    if (authMethod === 'key' && !keyPath.trim()) {
+      setError(translate(locale, 'requiredField'))
+      return
+    }
 
     const parsed = validateQrObject({
       host: host.trim(),
@@ -47,6 +66,8 @@ export function ProfileDialog({
       host: parsed.value.host,
       port: parsed.value.port,
       username: parsed.value.username,
+      authMethod,
+      keyPath: authMethod === 'key' ? keyPath.trim() : null,
       ...(profile ? { id: profile.id } : {})
     })
     setBusy(false)
@@ -129,6 +150,36 @@ export function ProfileDialog({
             autoComplete="off"
           />
         </label>
+
+        <label className="field">
+          <span>{translate(locale, 'authMethod')}</span>
+          <select
+            value={authMethod}
+            onChange={(event) => setAuthMethod(event.target.value as AuthMethod)}
+          >
+            <option value="password">{translate(locale, 'authPassword')}</option>
+            <option value="key">{translate(locale, 'authKey')}</option>
+          </select>
+        </label>
+
+        {authMethod === 'key' ? (
+          <div className="field">
+            <span>{translate(locale, 'keyPathLabel')}</span>
+            <div className="field-row">
+              <input
+                className="grow"
+                value={keyPath}
+                onChange={(event) => setKeyPath(event.target.value)}
+                placeholder={translate(locale, 'keyPathLabel')}
+                spellCheck={false}
+              />
+              <button className="button tiny" type="button" onClick={() => void pickKey()}>
+                {translate(locale, 'chooseKey')}
+              </button>
+            </div>
+            <p className="hint">{translate(locale, 'keyHint')}</p>
+          </div>
+        ) : null}
 
         {error ? <div className="form-error">{error}</div> : null}
       </form>

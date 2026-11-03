@@ -5,8 +5,12 @@
 SFTP client desktop tối giản cho **Windows** và **macOS**, có nhập cấu hình kết nối bằng **mã QR**.
 
 - Duyệt thư mục remote, tải lên / tải xuống, tạo thư mục, đổi tên, xoá.
+- Chọn nhiều file, tải cả thư mục, resume file dở, xử lý trùng tên (ghi đè / bỏ qua / đổi tên).
+- Đăng nhập bằng **mật khẩu** hoặc **SSH private key**; passphrase hỏi khi cần.
+- Tuỳ chọn lưu mật khẩu/passphrase trong **OS vault** (Windows DPAPI / macOS Keychain); mặc định không lưu.
+- Sắp xếp, lọc, back/forward lịch sử thư mục, bookmark theo từng kết nối.
+- Xem thuộc tính và đổi quyền file/thư mục (chmod), sao chép đường dẫn.
 - Nhập nhanh `host` / `port` / `username` từ ảnh QR (chọn file, kéo-thả, hoặc `Ctrl/Cmd+V`).
-- Không lưu mật khẩu. Không telemetry.
 - Kiểm tra **host key SHA-256** (TOFU) và chặn kết nối nếu khoá thay đổi.
 - Tự động cập nhật qua **GitHub Releases** (Windows; macOS cần ký số — xem bên dưới).
 - Giao diện **Tiếng Việt / English**, tông mono trắng–đen.
@@ -66,12 +70,13 @@ Chi tiết định dạng và các trường bị từ chối: [`docs/QR-FORMAT.
 
 Tóm tắt (chi tiết: [`docs/SECURITY.md`](docs/SECURITY.md)):
 
-- Mật khẩu chỉ nằm trong RAM trong lúc kết nối; **không ghi đĩa, không log**.
-- Host key được pin theo `host:port`; lần đầu hiển thị fingerprint SHA-256 để xác nhận; **mismatch → chặn cứng**.
+- Mật khẩu/passphrase mặc định chỉ nằm trong RAM. Người dùng có thể tự bật lưu trong OS vault; khi đó secret được mã hoá bằng Windows DPAPI hoặc macOS Keychain. Private key không bao giờ được lưu.
+- Host key được pin theo `host:port`; lần đầu hiển thị fingerprint SHA-256 để xác nhận; **mismatch → chặn cứng** kèm dialog so sánh fingerprint cũ/mới.
+- Chỉ chấp nhận thuật toán SSH hiện đại (Ed25519/ECDSA/RSA-SHA-2, curve25519, AES-GCM/CTR, HMAC-SHA-2); từ chối `ssh-rsa` SHA-1 và cipher cũ.
 - Chỉ mở SFTP subsystem — không shell, không exec, không agent forwarding.
 - Electron hardening: `sandbox`, `contextIsolation`, `nodeIntegration: false`, CSP chặt, từ chối mọi permission request, chặn navigation/new window, Electron fuses.
 - Mọi IPC payload được validate ở main process; renderer không có quyền truy cập filesystem/network trực tiếp.
-- Tên file do server trả về được sanitize trước khi ghi local (chống path traversal, reserved names Windows, tên quá dài).
+- Tên file do server trả về được sanitize trước khi ghi local (chống path traversal, reserved names Windows, tên quá dài, ký tự bidi/zero-width giả mạo phần mở rộng).
 - Không telemetry, không crash reporter.
 - Auto-update chỉ đọc GitHub Releases qua HTTPS; `electron-updater` kiểm tra SHA-512 từ metadata `latest.yml`.
 - Dữ liệu lưu local: `profiles.json`, `known_hosts.json`, `settings.json` trong thư mục userData; không chứa secret.
@@ -116,7 +121,7 @@ Nếu muốn ký số: cấu hình chứng chỉ trên máy build (`CSC_LINK`, `
 | Windows | `%APPDATA%\Lumine SFTP` |
 | macOS | `~/Library/Application Support/Lumine SFTP` |
 
-Chỉ gồm danh sách kết nối (không mật khẩu), host key đã tin cậy và ngôn ngữ UI.
+Chỉ gồm danh sách kết nối, host key đã tin cậy, bookmark, kích thước cửa sổ và ngôn ngữ UI. Nếu người dùng bật lưu secret, file `secrets.json` chỉ chứa blob đã mã hoá bởi OS vault.
 
 ## Kiểm thử
 
@@ -166,8 +171,8 @@ docs/          SECURITY.md, QR-FORMAT.md
 
 ## Không nằm trong phạm vi (YAGNI)
 
-Terminal/SSH shell · FTP/FTPS/S3 · sync thư mục · SSH key auth · port forwarding ·
-lưu mật khẩu · quét camera · telemetry · sửa file remote · chmod.
+Terminal/SSH shell · FTP/FTPS/S3/WebDAV · sync thư mục · port forwarding/jump host · proxy ·
+dual-pane · quét camera · telemetry · sửa file remote trực tiếp.
 
 ## Giấy phép & ghi công
 

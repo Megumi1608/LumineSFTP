@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   assertAnswers,
+  assertConnectSecret,
   assertKnownHostKey,
   assertLocale,
   assertPassword,
@@ -30,7 +31,42 @@ describe('IPC contract', () => {
         username: 'me',
         name: 'Work'
       })
-    ).toEqual({ host: 'example.com', port: 2022, username: 'me', name: 'Work' })
+    ).toEqual({
+      host: 'example.com',
+      port: 2022,
+      username: 'me',
+      name: 'Work',
+      authMethod: 'password',
+      keyPath: null
+    })
+  })
+
+  it('accepts key auth profiles', () => {
+    const result = assertProfileSave({
+      host: 'example.com',
+      port: 22,
+      username: 'me',
+      authMethod: 'key',
+      keyPath: 'C:\\Users\\me\\.ssh\\id_ed25519'
+    })
+    expect(result.authMethod).toBe('key')
+    expect(result.keyPath).toContain('id_ed25519')
+  })
+
+  it('rejects key auth without a key path and connect secrets with unknown fields', () => {
+    expectInvalid(() =>
+      assertProfileSave({
+        host: 'example.com',
+        port: 22,
+        username: 'me',
+        authMethod: 'key'
+      })
+    )
+    expectInvalid(() => assertConnectSecret({ password: 'x', extra: true }))
+    expect(assertConnectSecret({ passphrase: 'x', saveSecret: true })).toEqual({
+      passphrase: 'x',
+      saveSecret: true
+    })
   })
 
   it('accepts an id when saving an existing profile', () => {
