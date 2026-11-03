@@ -24,6 +24,11 @@ Lumine SFTP sử dụng các thư viện sau. Giấy phép gốc thuộc về t�
 | Playwright Core | Apache-2.0 |
 | qrcode (chỉ tạo ảnh test) | MIT |
 
+## Brand assets
+
+LumineCloud cloud logo — © LumineCloud, used for the Lumine SFTP icon with permission.
+Source: https://luminecloud.com
+
 ## Ghi công thiết kế
 
 Một số pattern bảo mật (host-key TOFU, kiểm tra IPC, lưu secret bằng hệ điều hành)

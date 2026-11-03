@@ -1,7 +1,8 @@
 import type { ReactNode } from 'react'
 import type { ConnectionStatus, Locale, Profile } from '../../../shared/types'
+import lumineCloudLogo from '../assets/luminecloud-cloud.png'
 import { translate } from '../i18n'
-import { PlusIcon, QrIcon, ServerIcon, SettingsIcon } from './Icons'
+import { PlusIcon, QrIcon, SettingsIcon } from './Icons'
 
 export function Sidebar({
   profiles,
@@ -26,7 +27,7 @@ export function Sidebar({
     <aside className="sidebar">
       <div className="brand">
         <div className="brand-mark">
-          <ServerIcon />
+          <img src={lumineCloudLogo} alt="" />
         </div>
         <div>
           <strong>{translate(locale, 'appName')}</strong>

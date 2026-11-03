@@ -61,6 +61,7 @@ function createWindow(): BrowserWindow {
     title: 'Lumine SFTP',
     backgroundColor: '#0b0b0b',
     autoHideMenuBar: true,
+    ...(isDev ? { icon: join(__dirname, '../../build/icon.png') } : {}),
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       sandbox: true,

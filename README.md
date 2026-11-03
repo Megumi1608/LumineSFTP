@@ -15,6 +15,8 @@ SFTP client desktop tối giản cho **Windows** và **macOS**, có nhập cấu
   <img src="build/icon.png" width="112" alt="Lumine SFTP icon" />
 </p>
 
+Logo: [LumineCloud](https://luminecloud.com).
+
 ## Bắt đầu nhanh
 
 Yêu cầu: **Node.js 22.12+**, npm.

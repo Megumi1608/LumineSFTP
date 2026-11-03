@@ -1,10 +1,44 @@
 Add-Type -AssemblyName System.Drawing
 
-$size = 1024
-$bmp = New-Object System.Drawing.Bitmap($size, $size, [System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
-$g = [System.Drawing.Graphics]::FromImage($bmp)
-$g.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
-$g.Clear([System.Drawing.Color]::Transparent)
+$root = Split-Path -Parent $PSScriptRoot
+$sourcePath = Join-Path $root 'build/luminecloud-logo.png'
+$assetDir = Join-Path $root 'src/renderer/src/assets'
+$assetPath = Join-Path $assetDir 'luminecloud-cloud.png'
+New-Item -ItemType Directory -Force -Path $assetDir | Out-Null
+
+$source = [System.Drawing.Bitmap]::new($sourcePath)
+
+# Find the visible logo bounds so the cloud is not lost inside its transparent padding.
+$minX = $source.Width
+$minY = $source.Height
+$maxX = -1
+$maxY = -1
+for ($y = 0; $y -lt $source.Height; $y++) {
+  for ($x = 0; $x -lt $source.Width; $x++) {
+    if ($source.GetPixel($x, $y).A -gt 16) {
+      if ($x -lt $minX) { $minX = $x }
+      if ($x -gt $maxX) { $maxX = $x }
+      if ($y -lt $minY) { $minY = $y }
+      if ($y -gt $maxY) { $maxY = $y }
+    }
+  }
+}
+
+$pad = 8
+$minX = [Math]::Max(0, $minX - $pad)
+$minY = [Math]::Max(0, $minY - $pad)
+$maxX = [Math]::Min($source.Width - 1, $maxX + $pad)
+$maxY = [Math]::Min($source.Height - 1, $maxY + $pad)
+$crop = [System.Drawing.Rectangle]::new($minX, $minY, ($maxX - $minX + 1), ($maxY - $minY + 1))
+
+$cloud = [System.Drawing.Bitmap]::new($crop.Width, $crop.Height, [System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
+$g = [System.Drawing.Graphics]::FromImage($cloud)
+$g.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::HighQuality
+$g.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
+$g.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::HighQuality
+$g.DrawImage($source, [System.Drawing.Rectangle]::new(0, 0, $crop.Width, $crop.Height), $crop, [System.Drawing.GraphicsUnit]::Pixel)
+$g.Dispose()
+$cloud.Save($assetPath, [System.Drawing.Imaging.ImageFormat]::Png)
 
 function New-RoundedPath([float]$x, [float]$y, [float]$w, [float]$h, [float]$r) {
   $path = New-Object System.Drawing.Drawing2D.GraphicsPath
@@ -17,51 +51,40 @@ function New-RoundedPath([float]$x, [float]$y, [float]$w, [float]$h, [float]$r) 
   return $path
 }
 
-$outer = New-RoundedPath 28 28 968 968 228
-$rect = New-Object System.Drawing.Rectangle 28, 28, 968, 968
-$bg = New-Object System.Drawing.Drawing2D.LinearGradientBrush(
-  $rect,
-  [System.Drawing.Color]::FromArgb(255, 42, 42, 42),
-  [System.Drawing.Color]::FromArgb(255, 5, 5, 5),
-  58
+$size = 1024
+$icon = [System.Drawing.Bitmap]::new($size, $size, [System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
+$g = [System.Drawing.Graphics]::FromImage($icon)
+$g.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
+$g.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
+$g.Clear([System.Drawing.Color]::Transparent)
+
+$frame = New-RoundedPath 28 28 968 968 228
+$frameBrush = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(255, 11, 11, 11))
+$g.FillPath($frameBrush, $frame)
+$framePen = New-Object System.Drawing.Pen([System.Drawing.Color]::FromArgb(255, 31, 31, 31), 3)
+$g.DrawPath($framePen, $frame)
+
+$targetWidth = 700
+$targetHeight = [int][Math]::Round($targetWidth * $cloud.Height / $cloud.Width)
+$targetX = [int](($size - $targetWidth) / 2)
+$targetY = [int](($size - $targetHeight) / 2)
+$attributes = New-Object System.Drawing.Imaging.ImageAttributes
+$attributes.SetWrapMode([System.Drawing.Drawing2D.WrapMode]::TileFlipXY)
+$g.DrawImage(
+  $cloud,
+  [System.Drawing.Rectangle]::new($targetX, $targetY, $targetWidth, $targetHeight),
+  0,
+  0,
+  $cloud.Width,
+  $cloud.Height,
+  [System.Drawing.GraphicsUnit]::Pixel,
+  $attributes
 )
-$g.FillPath($bg, $outer)
 
-$borderPen = New-Object System.Drawing.Pen([System.Drawing.Color]::FromArgb(55, 255, 255, 255), 3)
-$g.DrawPath($borderPen, $outer)
+$icon.Save((Join-Path $root 'build/icon.png'), [System.Drawing.Imaging.ImageFormat]::Png)
 
-$glow = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(10, 255, 255, 255))
-$g.FillEllipse($glow, 120, -140, 820, 760)
-
-$barBrush = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(255, 250, 250, 248))
-$accent = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(255, 255, 255, 255))
-$violet = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(255, 168, 168, 164))
-$dark = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(255, 10, 10, 10))
-
-for ($i = 0; $i -lt 3; $i++) {
-  $y = 262 + $i * 190
-  $bar = New-RoundedPath 236 $y 552 132 32
-  $g.FillPath($barBrush, $bar)
-  $dot = if ($i -eq 1) { $violet } else { $dark }
-  $g.FillEllipse($dot, 292, ($y + 51), 30, 30)
-  $g.FillRectangle($dark, 596, ($y + 57), 118, 16)
-}
-
-# Small security badge in the lower-right corner.
-$badge = New-RoundedPath 700 704 190 190 52
-$g.FillPath($dark, $badge)
-$badgePen = New-Object System.Drawing.Pen([System.Drawing.Color]::FromArgb(255, 255, 255, 255), 7)
-$g.DrawPath($badgePen, $badge)
-$lockPen = New-Object System.Drawing.Pen([System.Drawing.Color]::FromArgb(255, 255, 255, 255), 18)
-$lockPen.StartCap = [System.Drawing.Drawing2D.LineCap]::Round
-$lockPen.EndCap = [System.Drawing.Drawing2D.LineCap]::Round
-$g.DrawArc($lockPen, 762, 760, 66, 70, 180, 180)
-$lockBrush = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(255, 255, 255, 255))
-$lockBody = New-RoundedPath 750 802 90 70 14
-$g.FillPath($lockBrush, $lockBody)
-
-New-Item -ItemType Directory -Force -Path build | Out-Null
-$bmp.Save("$PSScriptRoot\..\build\icon.png", [System.Drawing.Imaging.ImageFormat]::Png)
 $g.Dispose()
-$bmp.Dispose()
-Write-Output "wrote build/icon.png"
+$icon.Dispose()
+$cloud.Dispose()
+$source.Dispose()
+Write-Output "wrote build/icon.png and $assetPath"

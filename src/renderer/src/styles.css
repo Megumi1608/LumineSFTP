@@ -133,13 +133,16 @@ select:focus-visible {
 }
 
 .brand-mark {
-  width: 34px;
+  width: 40px;
   height: 34px;
-  border-radius: 8px;
   display: grid;
   place-items: center;
-  color: var(--side);
-  background: #ffffff;
+}
+
+.brand-mark img {
+  display: block;
+  width: 40px;
+  height: auto;
 }
 
 .brand strong {
