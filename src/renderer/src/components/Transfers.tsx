@@ -2,7 +2,7 @@ import type { ReactNode } from 'react'
 import type { Locale, TransferInfo } from '../../../shared/types'
 import { formatBytes, percent } from '../format'
 import { errorText, translate, type I18nKey } from '../i18n'
-import { CloseIcon, DownloadIcon, UploadIcon } from './Icons'
+import { CloseIcon, CopyIcon, DownloadIcon, UploadIcon } from './Icons'
 
 const STATE_KEY: Record<TransferInfo['state'], I18nKey> = {
   queued: 'queued',
@@ -51,7 +51,13 @@ export function Transfers({
           return (
             <div className={`transfer state-${transfer.state}`} key={transfer.id}>
               <span className={`transfer-icon ${transfer.direction}`}>
-                {transfer.direction === 'upload' ? <UploadIcon /> : <DownloadIcon />}
+                {transfer.direction === 'upload' ? (
+                  <UploadIcon />
+                ) : transfer.direction === 'copy' ? (
+                  <CopyIcon />
+                ) : (
+                  <DownloadIcon />
+                )}
               </span>
               <div className="transfer-main">
                 <div className="transfer-line">

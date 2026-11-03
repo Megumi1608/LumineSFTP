@@ -44,7 +44,15 @@ function mockScript({ withProfiles, withConnected }) {
     const profiles = ${JSON.stringify(withProfiles ? profiles : [])};
     const knownHosts = ${JSON.stringify(withProfiles ? knownHosts : [])};
     const entries = ${JSON.stringify(entries)};
-    const listing = { ok: true, data: { path: '/home/demo-user', entries } };
+    const listing = { ok: true, data: { path: '/home/demo-user', entries, parent: '/home' } };
+    const localListing = {
+      ok: true,
+      data: {
+        path: 'C:/Users/demo',
+        parent: 'C:/Users',
+        entries: ${JSON.stringify(entries).replace(/'/g, "\'")}
+      }
+    };
     let statusCallback = null;
     const ok = (data = null) => ({ ok: true, data });
     window.lumine = {
@@ -61,8 +69,21 @@ function mockScript({ withProfiles, withConnected }) {
         list: async () => ok(knownHosts),
         forget: async () => ok(null)
       },
-      connect: async () => ok(profiles[0]),
-      disconnect: async () => ok(null),
+      connect: async (profileId, password, sessionId) => {
+        if (statusCallback) {
+          setTimeout(
+            () => statusCallback({ state: 'connected', sessionId, profileId }),
+            30
+          )
+        }
+        return ok({ profile: profiles[0], sessionId })
+      },
+      disconnect: async (sessionId) => {
+        if (statusCallback) {
+          setTimeout(() => statusCallback({ state: 'disconnected', sessionId }), 10)
+        }
+        return ok(null)
+      },
       respondHostKey: async () => ok(null),
       answerInteractive: async () => ok(null),
       sftp: {
@@ -72,6 +93,18 @@ function mockScript({ withProfiles, withConnected }) {
         remove: async () => ok(null),
         upload: async () => ok({ queued: 1 }),
         download: async () => ok({ queued: 1 }),
+        open: async () => ok({ jobId: 'open-1' })
+      },
+      local: {
+        home: async () => ok({ path: 'C:/Users/demo' }),
+        list: async () => localListing,
+        mkdir: async () => ok(null),
+        rename: async () => ok(null),
+        remove: async () => ok(null),
+        open: async () => ok(null)
+      },
+      transfer: {
+        copy: async () => ok({ jobId: 'copy-1' }),
         cancel: async () => ok(null)
       },
       updates: {
@@ -83,9 +116,6 @@ function mockScript({ withProfiles, withConnected }) {
       },
       onStatus: (callback) => {
         statusCallback = callback;
-        if (${withConnected ? 'true' : 'false'}) {
-          setTimeout(() => callback({ state: 'connected', profileId: profiles[0].id }), 60);
-        }
         return () => { statusCallback = null; };
       },
       onHostKey: () => () => {},

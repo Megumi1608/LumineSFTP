@@ -5,6 +5,8 @@
 SFTP client desktop tối giản cho **Windows** và **macOS**, có nhập cấu hình kết nối bằng **mã QR**.
 
 - Duyệt thư mục remote, tải lên / tải xuống, tạo thư mục, đổi tên, xoá.
+- **Hai khung** cạnh nhau: mỗi khung chọn một kết nối SFTP hoặc **Máy tính này**; kéo-thả tệp và cả thư mục (copy đệ quy) giữa hai khung.
+- **Nháy đúp** tệp để mở bằng ứng dụng mặc định; **chuột phải** để mở menu thao tác nhanh.
 - Nhập nhanh `host` / `port` / `username` từ ảnh QR (chọn file, kéo-thả, hoặc `Ctrl/Cmd+V`).
 - Không lưu mật khẩu. Không telemetry.
 - Kiểm tra **host key SHA-256** (TOFU) và chặn kết nối nếu khoá thay đổi.

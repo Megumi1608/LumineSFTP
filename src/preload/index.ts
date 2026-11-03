@@ -4,6 +4,7 @@ import {
   type ConnectionStatus,
   type HostKeyPrompt,
   type InteractiveRequest,
+  type Location,
   type LumineApi,
   type ProfileInput,
   type TransferInfo,
@@ -35,22 +36,54 @@ const api: LumineApi = {
     list: () => ipcRenderer.invoke(IPC.knownHostsList),
     forget: (key: string) => ipcRenderer.invoke(IPC.knownHostsForget, key)
   },
-  connect: (profileId: string, password: string) =>
-    ipcRenderer.invoke(IPC.connect, profileId, password),
-  disconnect: () => ipcRenderer.invoke(IPC.disconnect),
-  respondHostKey: (requestId: string, accept: boolean) =>
-    ipcRenderer.invoke(IPC.hostKeyRespond, requestId, accept),
-  answerInteractive: (requestId: string, cancelled: boolean, answers: string[]) =>
-    ipcRenderer.invoke(IPC.interactiveAnswer, requestId, cancelled, answers),
+  connect: (profileId: string, password: string, sessionId: string) =>
+    ipcRenderer.invoke(IPC.connect, profileId, password, sessionId),
+  disconnect: (sessionId: string) => ipcRenderer.invoke(IPC.disconnect, sessionId),
+  respondHostKey: (sessionId: string, requestId: string, accept: boolean) =>
+    ipcRenderer.invoke(IPC.hostKeyRespond, sessionId, requestId, accept),
+  answerInteractive: (
+    sessionId: string,
+    requestId: string,
+    cancelled: boolean,
+    answers: string[]
+  ) =>
+    ipcRenderer.invoke(
+      IPC.interactiveAnswer,
+      sessionId,
+      requestId,
+      cancelled,
+      answers
+    ),
   sftp: {
-    list: (path: string) => ipcRenderer.invoke(IPC.sftpList, path),
-    mkdir: (dir: string, name: string) => ipcRenderer.invoke(IPC.sftpMkdir, dir, name),
+    list: (sessionId: string, path: string) =>
+      ipcRenderer.invoke(IPC.sftpList, sessionId, path),
+    mkdir: (sessionId: string, dir: string, name: string) =>
+      ipcRenderer.invoke(IPC.sftpMkdir, sessionId, dir, name),
+    rename: (sessionId: string, dir: string, from: string, to: string) =>
+      ipcRenderer.invoke(IPC.sftpRename, sessionId, dir, from, to),
+    remove: (sessionId: string, path: string) =>
+      ipcRenderer.invoke(IPC.sftpRemove, sessionId, path),
+    upload: (sessionId: string, dir: string) =>
+      ipcRenderer.invoke(IPC.sftpUpload, sessionId, dir),
+    download: (sessionId: string, path: string) =>
+      ipcRenderer.invoke(IPC.sftpDownload, sessionId, path),
+    open: (sessionId: string, path: string) =>
+      ipcRenderer.invoke(IPC.sftpOpen, sessionId, path)
+  },
+  local: {
+    home: () => ipcRenderer.invoke(IPC.localHome),
+    list: (path: string) => ipcRenderer.invoke(IPC.localList, path),
+    mkdir: (dir: string, name: string) =>
+      ipcRenderer.invoke(IPC.localMkdir, dir, name),
     rename: (dir: string, from: string, to: string) =>
-      ipcRenderer.invoke(IPC.sftpRename, dir, from, to),
-    remove: (path: string) => ipcRenderer.invoke(IPC.sftpRemove, path),
-    upload: (dir: string) => ipcRenderer.invoke(IPC.sftpUpload, dir),
-    download: (path: string) => ipcRenderer.invoke(IPC.sftpDownload, path),
-    cancel: (id: string) => ipcRenderer.invoke(IPC.sftpCancel, id)
+      ipcRenderer.invoke(IPC.localRename, dir, from, to),
+    remove: (path: string) => ipcRenderer.invoke(IPC.localRemove, path),
+    open: (path: string) => ipcRenderer.invoke(IPC.localOpen, path)
+  },
+  transfer: {
+    copy: (from: Location, to: Location) =>
+      ipcRenderer.invoke(IPC.transferCopy, from, to),
+    cancel: (id: string) => ipcRenderer.invoke(IPC.transferCancel, id)
   },
   updates: {
     get: () => ipcRenderer.invoke(IPC.updatesGet),

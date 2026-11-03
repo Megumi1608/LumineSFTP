@@ -1,4 +1,7 @@
-import { app, dialog, ipcMain, type BrowserWindow } from 'electron'
+import { randomUUID } from 'node:crypto'
+import fs from 'node:fs'
+import path from 'node:path'
+import { app, dialog, ipcMain, shell, type BrowserWindow } from 'electron'
 import {
   assertAnswers,
   assertId,
@@ -11,8 +14,17 @@ import {
   assertRequestId,
   ContractError
 } from '../shared/contract'
-import { IPC, type Err, type Result } from '../shared/types'
+import { IPC, type Err, type Location, type Result } from '../shared/types'
 import { AppError, toErr } from './errors'
+import { CopyService } from './copy'
+import {
+  listLocal,
+  localHome,
+  mkdirLocal,
+  normalizeLocalPath,
+  removeLocal,
+  renameLocal
+} from './local-fs'
 import { nativeStrings } from './native-strings'
 import { SftpSession, type SessionEvents } from './ssh'
 import type { Store } from './store'
@@ -25,22 +37,52 @@ import {
   openReleasePage
 } from './updater'
 
+function assertLocalPath(value: unknown): string {
+  return normalizeLocalPath(assertRemotePath(value))
+}
+
+function assertLocation(value: unknown): Location {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    throw new ContractError('location')
+  }
+  const record = value as Record<string, unknown>
+  if (record.kind === 'remote') {
+    return {
+      kind: 'remote',
+      sessionId: assertId(record.sessionId),
+      path: assertRemotePath(record.path)
+    }
+  }
+  if (record.kind === 'local') {
+    return { kind: 'local', path: assertRemotePath(record.path) }
+  }
+  throw new ContractError('location')
+}
+
 export function registerIpc(window: BrowserWindow, store: Store): void {
-  let session: SftpSession | null = null
+  const sessions = new Map<string, SftpSession>()
 
   const send = (channel: string, payload: unknown): void => {
     if (window.isDestroyed()) return
     window.webContents.send(channel, payload)
   }
 
-  const events: SessionEvents = {
-    status: (status) => send(IPC.eventStatus, status),
-    hostKey: (prompt) => send(IPC.eventHostKey, prompt),
-    interactive: (request) => send(IPC.eventInteractive, request),
-    transfer: (transfer) => send(IPC.eventTransfer, transfer)
-  }
+  const copyService = new CopyService({
+    getSession: (sessionId) => sessions.get(sessionId) ?? null,
+    emit: (transfer) => send(IPC.eventTransfer, transfer)
+  })
 
-  const requireSession = (): SftpSession => {
+  const sessionEvents = (sessionId: string): SessionEvents => ({
+    status: (status) => send(IPC.eventStatus, { ...status, sessionId }),
+    hostKey: (prompt) => send(IPC.eventHostKey, { ...prompt, sessionId }),
+    interactive: (request) =>
+      send(IPC.eventInteractive, { ...request, sessionId }),
+    transfer: (transfer) => send(IPC.eventTransfer, { ...transfer, sessionId })
+  })
+
+  const requireSession = (rawId: unknown): SftpSession => {
+    const sessionId = assertId(rawId)
+    const session = sessions.get(sessionId)
     if (!session) throw new AppError('NOT_CONNECTED')
     return session
   }
@@ -103,44 +145,54 @@ export function registerIpc(window: BrowserWindow, store: Store): void {
     return null
   })
 
-  handle(IPC.connect, async (rawId, rawPassword) => {
+  handle(IPC.connect, async (rawId, rawPassword, rawSession) => {
     const id = assertId(rawId)
     const password = assertPassword(rawPassword)
+    // Khung tự sinh id phiên để mọi sự kiện (host key, interactive, trạng thái)
+    // có thể được định tuyến về đúng khung ngay từ bước kết nối.
+    const sessionId = assertId(rawSession)
+    if (sessions.has(sessionId)) throw new ContractError('session')
     const profile = store.getProfile(id)
-
-    session?.dispose()
-    session = null
-
-    const next = new SftpSession(profile, { knownHosts: store, events })
-    session = next
+    const next = new SftpSession(profile, {
+      knownHosts: store,
+      events: sessionEvents(sessionId)
+    })
+    sessions.set(sessionId, next)
     try {
       await next.connect(password)
     } catch (error) {
       next.dispose()
-      if (session === next) session = null
+      sessions.delete(sessionId)
       throw error
     }
     store.touchProfile(id)
-    return store.getProfile(id)
+    return { profile: store.getProfile(id), sessionId }
   })
 
-  handle(IPC.disconnect, () => {
-    session?.dispose()
-    session = null
-    send(IPC.eventStatus, { state: 'disconnected' })
+  handle(IPC.disconnect, (rawId) => {
+    const sessionId = assertId(rawId)
+    const session = sessions.get(sessionId)
+    if (session) {
+      session.dispose()
+      sessions.delete(sessionId)
+    }
+    send(IPC.eventStatus, { state: 'disconnected', sessionId })
     return null
   })
 
-  handle(IPC.hostKeyRespond, (rawRequestId, rawAccept) => {
+  handle(IPC.hostKeyRespond, (rawSession, rawRequestId, rawAccept) => {
     if (typeof rawAccept !== 'boolean') throw new ContractError('accept')
-    requireSession().respondHostKey(assertRequestId(rawRequestId), rawAccept)
+    requireSession(rawSession).respondHostKey(
+      assertRequestId(rawRequestId),
+      rawAccept
+    )
     return null
   })
 
-  handle(IPC.interactiveAnswer, (rawRequestId, rawCancelled, rawAnswers) => {
+  handle(IPC.interactiveAnswer, (rawSession, rawRequestId, rawCancelled, rawAnswers) => {
     if (typeof rawCancelled !== 'boolean') throw new ContractError('cancelled')
     const answers = rawCancelled ? [] : assertAnswers(rawAnswers)
-    requireSession().answerInteractive(
+    requireSession(rawSession).answerInteractive(
       assertRequestId(rawRequestId),
       rawCancelled,
       answers
@@ -148,12 +200,12 @@ export function registerIpc(window: BrowserWindow, store: Store): void {
     return null
   })
 
-  handle(IPC.sftpList, (rawPath) => {
+  handle(IPC.sftpList, (rawSession, rawPath) => {
     const path = rawPath === '' || rawPath === undefined ? '' : assertRemotePath(rawPath)
-    return requireSession().list(path)
+    return requireSession(rawSession).list(path)
   })
 
-  handle(IPC.sftpMkdir, async (rawDirectory, rawName) => {
+  handle(IPC.sftpMkdir, async (rawSession, rawDirectory, rawName) => {
     const directory = assertRemotePath(rawDirectory)
     let name: string
     try {
@@ -161,11 +213,11 @@ export function registerIpc(window: BrowserWindow, store: Store): void {
     } catch {
       throw new AppError('INVALID_NAME')
     }
-    await requireSession().mkdir(directory, name)
+    await requireSession(rawSession).mkdir(directory, name)
     return null
   })
 
-  handle(IPC.sftpRename, async (rawDirectory, rawFrom, rawTo) => {
+  handle(IPC.sftpRename, async (rawSession, rawDirectory, rawFrom, rawTo) => {
     const directory = assertRemotePath(rawDirectory)
     let from: string
     let to: string
@@ -175,12 +227,11 @@ export function registerIpc(window: BrowserWindow, store: Store): void {
     } catch {
       throw new AppError('INVALID_NAME')
     }
-    await requireSession().rename(directory, from, to)
+    await requireSession(rawSession).rename(directory, from, to)
     return null
   })
 
-  handle(IPC.sftpRemove, async (rawPath) => {
-    const path = assertRemotePath(rawPath)
+  const confirmDelete = async (target: string): Promise<void> => {
     const text = native()
     const decision = await dialog.showMessageBox(window, {
       type: 'warning',
@@ -189,15 +240,22 @@ export function registerIpc(window: BrowserWindow, store: Store): void {
       cancelId: 0,
       noLink: true,
       message: text.deleteTitle,
-      detail: `${path}\n\n${text.deleteMessage}`
+      detail: `${target}\n\n${text.deleteMessage}`
     })
     if (decision.response !== 1) throw new AppError('DIALOG_CANCELLED')
-    await requireSession().remove(path)
+  }
+
+  handle(IPC.sftpRemove, async (rawSession, rawPath) => {
+    const path = assertRemotePath(rawPath)
+    const active = requireSession(rawSession)
+    await confirmDelete(path)
+    await active.remove(path)
     return null
   })
 
-  handle(IPC.sftpUpload, async (rawDirectory) => {
+  handle(IPC.sftpUpload, async (rawSession, rawDirectory) => {
     const directory = assertRemotePath(rawDirectory)
+    const active = requireSession(rawSession)
     const text = native()
     const picked = await dialog.showOpenDialog(window, {
       title: text.chooseFiles,
@@ -207,7 +265,6 @@ export function registerIpc(window: BrowserWindow, store: Store): void {
       throw new AppError('DIALOG_CANCELLED')
     }
 
-    const active = requireSession()
     try {
       return { queued: await active.upload(picked.filePaths, directory, false) }
     } catch (error) {
@@ -226,9 +283,11 @@ export function registerIpc(window: BrowserWindow, store: Store): void {
     }
   })
 
-  handle(IPC.sftpDownload, async (rawPath) => {
+  handle(IPC.sftpDownload, async (rawSession, rawPath) => {
     const remotePath = assertRemotePath(rawPath)
     const text = native()
+    const active = requireSession(rawSession)
+    const stats = await active.stat(remotePath)
     const picked = await dialog.showOpenDialog(window, {
       title: text.chooseFolder,
       properties: ['openDirectory', 'createDirectory']
@@ -237,7 +296,15 @@ export function registerIpc(window: BrowserWindow, store: Store): void {
       throw new AppError('DIALOG_CANCELLED')
     }
     const localDirectory = picked.filePaths[0]
-    const active = requireSession()
+
+    if (stats.kind === 'directory') {
+      const sessionId = assertId(rawSession)
+      copyService.start(
+        { kind: 'remote', sessionId, path: remotePath },
+        { kind: 'local', path: localDirectory }
+      )
+      return { queued: 1 }
+    }
 
     try {
       return { queued: await active.download(remotePath, localDirectory, false) }
@@ -257,9 +324,97 @@ export function registerIpc(window: BrowserWindow, store: Store): void {
     }
   })
 
-  handle(IPC.sftpCancel, (rawId) => {
-    requireSession().cancelTransfer(assertRequestId(rawId))
+  handle(IPC.sftpOpen, async (rawSession, rawPath) => {
+    const sessionId = assertId(rawSession)
+    const session = requireSession(rawSession)
+    const remotePath = assertRemotePath(rawPath)
+    const stats = await session.stat(remotePath)
+    if (stats.kind !== 'file' && stats.kind !== 'link') {
+      throw new AppError('INVALID_PATH', remotePath)
+    }
+
+    const directory = path.join(app.getPath('temp'), 'lumine-open', randomUUID())
+    fs.mkdirSync(directory, { recursive: true })
+    const jobId = copyService.start(
+      { kind: 'remote', sessionId, path: remotePath },
+      { kind: 'local', path: directory },
+      (destination) => {
+        void shell.openPath(destination)
+      }
+    )
+    return { jobId }
+  })
+
+  handle(IPC.localHome, () => ({ path: localHome() }))
+
+  handle(IPC.localList, (rawPath) => {
+    const target =
+      rawPath === '' || rawPath === undefined ? localHome() : assertLocalPath(rawPath)
+    return listLocal(target)
+  })
+
+  handle(IPC.localMkdir, async (rawDirectory, rawName) => {
+    const directory = assertLocalPath(rawDirectory)
+    let name: string
+    try {
+      name = assertRemoteName(rawName)
+    } catch {
+      throw new AppError('INVALID_NAME')
+    }
+    await mkdirLocal(directory, name)
     return null
+  })
+
+  handle(IPC.localRename, async (rawDirectory, rawFrom, rawTo) => {
+    const directory = assertLocalPath(rawDirectory)
+    let from: string
+    let to: string
+    try {
+      from = assertRemoteName(rawFrom)
+      to = assertRemoteName(rawTo)
+    } catch {
+      throw new AppError('INVALID_NAME')
+    }
+    await renameLocal(directory, from, to)
+    return null
+  })
+
+  handle(IPC.localRemove, async (rawPath) => {
+    const target = assertLocalPath(rawPath)
+    await confirmDelete(target)
+    await removeLocal(target)
+    return null
+  })
+
+  handle(IPC.localOpen, async (rawPath) => {
+    const target = assertLocalPath(rawPath)
+    await fs.promises.access(target)
+    const error = await shell.openPath(target)
+    if (error) throw new AppError('INTERNAL', error)
+    return null
+  })
+
+  handle(IPC.transferCopy, (rawFrom, rawTo) => {
+    const from = assertLocation(rawFrom)
+    const to = assertLocation(rawTo)
+    if (from.kind === 'remote') requireSession(from.sessionId)
+    if (to.kind === 'remote') requireSession(to.sessionId)
+    const jobId = copyService.start(from, to)
+    return { jobId }
+  })
+
+  handle(IPC.transferCancel, (rawId) => {
+    const id = assertRequestId(rawId)
+    if (copyService.cancel(id)) return null
+    for (const session of sessions.values()) {
+      try {
+        session.cancelTransfer(id)
+        return null
+      } catch {
+        // Không phải lượt truyền của phiên này; thử phiên kế tiếp.
+      }
+    }
+    throw new AppError('INVALID_INPUT', id)
   })
 
   handle(IPC.updatesGet, () => getUpdateStatus())
