@@ -59,7 +59,7 @@ function createWindow(): BrowserWindow {
     minHeight: 600,
     show: false,
     title: 'Lumine SFTP',
-    backgroundColor: '#0b0b0b',
+    backgroundColor: '#0f0f10',
     autoHideMenuBar: true,
     ...(isDev ? { icon: join(__dirname, '../../build/icon.png') } : {}),
     webPreferences: {

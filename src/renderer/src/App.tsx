@@ -407,64 +407,66 @@ export default function App(): ReactNode {
 
       <main className="main">
         <header className="main-head">
-          <div className="head-title">
-            <h1>{activeProfile ? activeProfile.name : translate(locale, 'profiles')}</h1>
-            {activeProfile ? (
-              <p>{`${activeProfile.username}@${activeProfile.host}:${activeProfile.port}`}</p>
-            ) : null}
-          </div>
+          <div className="main-head-inner">
+            <div className="head-title">
+              <h1>{activeProfile ? activeProfile.name : translate(locale, 'profiles')}</h1>
+              {activeProfile ? (
+                <p>{`${activeProfile.username}@${activeProfile.host}:${activeProfile.port}`}</p>
+              ) : null}
+            </div>
 
-          <div className="head-actions">
-            {updateStatus.state === 'available' && updateStatus.version ? (
-              <button
-                className="pill update-pill"
-                type="button"
-                onClick={() => setSettingsOpen(true)}
-              >
-                {translate(locale, 'updateAvailableShort', {
-                  version: updateStatus.version
-                })}
-              </button>
-            ) : null}
-            {updateStatus.state === 'downloaded' ? (
-              <button
-                className="pill update-pill"
-                type="button"
-                onClick={() => setSettingsOpen(true)}
-              >
-                {translate(locale, 'updateInstall')}
-              </button>
-            ) : null}
-
-            {activeProfile ? (
-              <span className={`pill state-${status.state}`}>
-                <span className="status-dot" />
-                {statusLabel(locale, status.state)}
-              </span>
-            ) : null}
-
-            {activeProfile ? (
-              connected || connectingState ? (
+            <div className="head-actions">
+              {updateStatus.state === 'available' && updateStatus.version ? (
                 <button
-                  className="button head-button"
+                  className="pill update-pill"
                   type="button"
-                  onClick={() => void disconnect()}
+                  onClick={() => setSettingsOpen(true)}
                 >
-                  {connected
-                    ? translate(locale, 'disconnect')
-                    : translate(locale, 'cancelConnection')}
+                  {translate(locale, 'updateAvailableShort', {
+                    version: updateStatus.version
+                  })}
                 </button>
-              ) : (
+              ) : null}
+              {updateStatus.state === 'downloaded' ? (
                 <button
-                  className="button head-button primary"
+                  className="pill update-pill"
                   type="button"
-                  disabled={connecting}
-                  onClick={() => setPasswordProfile(activeProfile)}
+                  onClick={() => setSettingsOpen(true)}
                 >
-                  {translate(locale, 'connect')}
+                  {translate(locale, 'updateInstall')}
                 </button>
-              )
-            ) : null}
+              ) : null}
+
+              {activeProfile ? (
+                <span className={`pill state-${status.state}`}>
+                  <span className="status-dot" />
+                  {statusLabel(locale, status.state)}
+                </span>
+              ) : null}
+
+              {activeProfile ? (
+                connected || connectingState ? (
+                  <button
+                    className="button head-button"
+                    type="button"
+                    onClick={() => void disconnect()}
+                  >
+                    {connected
+                      ? translate(locale, 'disconnect')
+                      : translate(locale, 'cancelConnection')}
+                  </button>
+                ) : (
+                  <button
+                    className="button head-button primary"
+                    type="button"
+                    disabled={connecting}
+                    onClick={() => setPasswordProfile(activeProfile)}
+                  >
+                    {translate(locale, 'connect')}
+                  </button>
+                )
+              ) : null}
+            </div>
           </div>
         </header>
 

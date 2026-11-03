@@ -9,7 +9,7 @@ SFTP client desktop tối giản cho **Windows** và **macOS**, có nhập cấu
 - Không lưu mật khẩu. Không telemetry.
 - Kiểm tra **host key SHA-256** (TOFU) và chặn kết nối nếu khoá thay đổi.
 - Tự động cập nhật qua **GitHub Releases** (Windows; macOS cần ký số — xem bên dưới).
-- Giao diện **Tiếng Việt / English**, tông mono trắng–đen.
+- Giao diện **Tiếng Việt / English**, cùng bộ màu với khu khách LumineCloud: nền tối, vàng `#ffd500`, font Geist, bo góc 8px.
 
 <p align="center">
   <img src="build/icon.png" width="112" alt="Lumine SFTP icon" />

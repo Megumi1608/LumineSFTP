@@ -36,7 +36,7 @@ export function Sidebar({
       </div>
 
       <div className="sidebar-actions">
-        <button className="button full" type="button" onClick={onAdd}>
+        <button className="button primary full" type="button" onClick={onAdd}>
           <PlusIcon /> {translate(locale, 'addProfile')}
         </button>
         <button className="button full" type="button" onClick={onQr}>
