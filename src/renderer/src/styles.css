@@ -1027,11 +1027,37 @@ select:focus-visible {
   min-height: 46px;
   padding: 0;
   border-bottom: 1px solid var(--rule);
-  transition: background 100ms ease;
+  cursor: default;
+  user-select: none;
+  transition:
+    background 100ms ease,
+    box-shadow 100ms ease;
+}
+
+.file-row.clickable {
+  cursor: pointer;
 }
 
 .file-row:hover {
   background: var(--paper-bright);
+}
+
+.file-row.clickable:active {
+  background: #f1efe9;
+}
+
+.file-row.selected {
+  background: #f7f5f1;
+  box-shadow: inset 2px 0 0 var(--ink); /* taste-skill-ignore: selected-row marker */
+}
+
+.file-row:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: -2px;
+}
+
+.file-row.selected .file-actions {
+  opacity: 1;
 }
 
 .file-name {

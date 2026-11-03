@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
 import type { Locale, RemoteEntry, RemoteListing } from '../../../shared/types'
 import { formatBytes, formatDate, remoteJoin } from '../format'
 import { translate } from '../i18n'
@@ -47,6 +47,28 @@ export function FileBrowser({
   const entries = listing?.entries ?? []
   const parts = path.split('/').filter(Boolean)
   const parent = path === '/' ? null : `/${parts.slice(0, -1).join('/')}`
+  const [selected, setSelected] = useState<string | null>(null)
+
+  useEffect(() => {
+    setSelected(null)
+  }, [path])
+
+  const activate = (entry: RemoteEntry): void => {
+    const target = remoteJoin(path, entry.name)
+    if (entry.kind === 'directory') onOpen(target)
+    else if (entry.kind === 'file' || entry.kind === 'link') onDownload(target)
+  }
+
+  const canActivate = (entry: RemoteEntry): boolean =>
+    entry.kind === 'directory' || entry.kind === 'file' || entry.kind === 'link'
+
+  const rowHint = (entry: RemoteEntry): string | undefined => {
+    if (entry.kind === 'directory') return translate(locale, 'openFolderHint')
+    if (entry.kind === 'file' || entry.kind === 'link') {
+      return translate(locale, 'downloadFileHint')
+    }
+    return undefined
+  }
 
   return (
     <section className="browser">
@@ -149,14 +171,32 @@ export function FileBrowser({
         {listing
           ? entries.map((entry) => {
               const target = remoteJoin(listing.path, entry.name)
+              const actionable = canActivate(entry)
               return (
                 <div
-                  className="file-row"
+                  className={`file-row${actionable ? ' clickable' : ''}${
+                    selected === entry.name ? ' selected' : ''
+                  }`}
                   key={entry.name}
-                  onDoubleClick={() => {
-                    if (entry.kind === 'directory') onOpen(target)
-                    else onDownload(target)
+                  onClick={() => {
+                    if (actionable) setSelected(entry.name)
                   }}
+                  onDoubleClick={() => {
+                    if (actionable) activate(entry)
+                  }}
+                  onKeyDown={(event) => {
+                    if (
+                      event.target === event.currentTarget &&
+                      actionable &&
+                      (event.key === 'Enter' || event.key === ' ')
+                    ) {
+                      event.preventDefault()
+                      activate(entry)
+                    }
+                  }}
+                  tabIndex={actionable ? 0 : -1}
+                  title={rowHint(entry)}
+                  aria-label={entry.name}
                 >
                   <div className="file-name">
                     <span className={`entry-icon kind-${entry.kind}`}>
@@ -170,7 +210,11 @@ export function FileBrowser({
                     {entry.kind === 'directory' ? '—' : formatBytes(entry.size)}
                   </span>
                   <span className="file-date num">{formatDate(entry.modified, locale)}</span>
-                  <div className="file-actions">
+                  <div
+                    className="file-actions"
+                    onClick={(event) => event.stopPropagation()}
+                    onDoubleClick={(event) => event.stopPropagation()}
+                  >
                     {entry.kind !== 'directory' ? (
                       <button
                         className="icon-button"
