@@ -1,7 +1,7 @@
 # Lumine SFTP — Kế hoạch triển khai
 
 > SFTP client desktop tối giản cho Windows & macOS, nhập cấu hình kết nối bằng mã QR.
-> Trạng thái: **Đã triển khai v0.1.1** — UI mono trắng–đen; auto-update qua GitHub Releases. Build và upload thủ công, không dùng CI.
+> Trạng thái: **Đã triển khai v0.1.2** — logo LumineCloud; UI mono trắng–đen; auto-update qua GitHub Releases. Build và upload thủ công, không dùng CI.
 
 ---
 
