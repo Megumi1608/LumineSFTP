@@ -82,6 +82,8 @@ export type ConnectionState =
 
 export interface ConnectionStatus {
   state: ConnectionState
+  /** Phiên nào phát trạng thái này — hai khung có thể cùng lúc có hai phiên. */
+  sessionId?: string
   profileId?: string
   profileName?: string
   host?: string
@@ -91,6 +93,7 @@ export interface ConnectionStatus {
 }
 
 export interface HostKeyPrompt {
+  sessionId: string
   requestId: string
   host: string
   port: number
@@ -99,6 +102,7 @@ export interface HostKeyPrompt {
 }
 
 export interface HostKeyMismatchPrompt {
+  sessionId: string
   host: string
   port: number
   keyType: string
@@ -113,6 +117,7 @@ export interface InteractivePromptLine {
 }
 
 export interface InteractiveRequest {
+  sessionId: string
   requestId: string
   name: string
   instructions: string
@@ -134,9 +139,11 @@ export interface RemoteEntry {
 export interface RemoteListing {
   path: string
   entries: RemoteEntry[]
+  /** Thư mục cha đã tuyệt đối; null khi đang ở gốc. */
+  parent?: string | null
 }
 
-export type TransferDirection = 'upload' | 'download'
+export type TransferDirection = 'upload' | 'download' | 'copy'
 export type TransferState = 'queued' | 'running' | 'done' | 'error' | 'cancelled'
 export type ConflictAction = 'overwrite' | 'skip' | 'rename'
 export type ConflictMode = 'error' | ConflictAction
@@ -149,9 +156,21 @@ export interface TransferInfo {
   total: number
   state: TransferState
   code?: ErrorCode
+  /** Phiên sở hữu lượt truyền; vắng mặt với job copy do bộ copy điều phối. */
+  sessionId?: string
   speed?: number
   eta?: number
   canRetry?: boolean
+}
+
+/** Một đầu của thao tác copy: phiên SFTP hoặc đĩa của máy đang chạy app. */
+export type Location =
+  | { kind: 'remote'; sessionId: string; path: string }
+  | { kind: 'local'; path: string }
+
+export interface ConnectResult {
+  profile: Profile
+  sessionId: string
 }
 
 export interface KnownHost {
@@ -217,9 +236,6 @@ export interface LumineApi {
     get(): Promise<Result<Settings>>
     setLocale(locale: Locale): Promise<Result<Settings>>
   }
-  secrets: {
-    forget(profileId: string): Promise<Result<Profile>>
-  }
   knownHosts: {
     list(): Promise<Result<KnownHost[]>>
     forget(key: string): Promise<Result<null>>
@@ -229,26 +245,60 @@ export interface LumineApi {
     add(profileId: string, path: string): Promise<Result<Bookmark>>
     remove(id: string): Promise<Result<null>>
   }
-  connect(profileId: string, secret: ConnectSecret): Promise<Result<Profile>>
-  disconnect(): Promise<Result<null>>
-  respondHostKey(requestId: string, accept: boolean): Promise<Result<null>>
+  secrets: {
+    forget(profileId: string): Promise<Result<Profile>>
+  }
+  connect(
+    profileId: string,
+    secret: ConnectSecret,
+    sessionId: string
+  ): Promise<Result<ConnectResult>>
+  disconnect(sessionId: string): Promise<Result<null>>
+  respondHostKey(
+    sessionId: string,
+    requestId: string,
+    accept: boolean
+  ): Promise<Result<null>>
   answerInteractive(
+    sessionId: string,
     requestId: string,
     cancelled: boolean,
     answers: string[]
   ): Promise<Result<null>>
   sftp: {
+    list(sessionId: string, path: string): Promise<Result<RemoteListing>>
+    mkdir(sessionId: string, dir: string, name: string): Promise<Result<null>>
+    rename(
+      sessionId: string,
+      dir: string,
+      from: string,
+      to: string
+    ): Promise<Result<null>>
+    remove(sessionId: string, paths: string[]): Promise<Result<{ queued: number }>>
+    upload(sessionId: string, dir: string): Promise<Result<{ queued: number }>>
+    uploadFolder(sessionId: string, dir: string): Promise<Result<{ queued: number }>>
+    download(
+      sessionId: string,
+      paths: string[]
+    ): Promise<Result<{ queued: number }>>
+    /** Tải về thư mục tạm của app rồi mở bằng ứng dụng mặc định. */
+    open(sessionId: string, path: string): Promise<Result<{ jobId: string }>>
+    retry(id: string): Promise<Result<null>>
+    reveal(id: string): Promise<Result<null>>
+    chmod(sessionId: string, path: string, mode: number): Promise<Result<null>>
+  }
+  local: {
+    home(): Promise<Result<{ path: string }>>
     list(path: string): Promise<Result<RemoteListing>>
     mkdir(dir: string, name: string): Promise<Result<null>>
     rename(dir: string, from: string, to: string): Promise<Result<null>>
-    remove(paths: string[]): Promise<Result<{ queued: number }>>
-    upload(dir: string): Promise<Result<{ queued: number }>>
-    uploadFolder(dir: string): Promise<Result<{ queued: number }>>
-    download(paths: string[]): Promise<Result<{ queued: number }>>
+    remove(path: string): Promise<Result<null>>
+    open(path: string): Promise<Result<null>>
+  }
+  transfer: {
+    /** Copy file/thư mục giữa hai đầu: remote↔remote, remote↔local. */
+    copy(from: Location, to: Location): Promise<Result<{ jobId: string }>>
     cancel(id: string): Promise<Result<null>>
-    retry(id: string): Promise<Result<null>>
-    reveal(id: string): Promise<Result<null>>
-    chmod(path: string, mode: number): Promise<Result<null>>
   }
   updates: {
     get(): Promise<Result<UpdateStatus>>
@@ -289,10 +339,18 @@ export const IPC = {
   sftpUpload: 'sftp:upload',
   sftpUploadFolder: 'sftp:upload-folder',
   sftpDownload: 'sftp:download',
-  sftpCancel: 'sftp:cancel',
+  sftpOpen: 'sftp:open',
   sftpRetry: 'sftp:retry',
   sftpReveal: 'sftp:reveal',
   sftpChmod: 'sftp:chmod',
+  localHome: 'local:home',
+  localList: 'local:list',
+  localMkdir: 'local:mkdir',
+  localRename: 'local:rename',
+  localRemove: 'local:remove',
+  localOpen: 'local:open',
+  transferCopy: 'transfer:copy',
+  transferCancel: 'transfer:cancel',
   updatesGet: 'updates:get',
   updatesCheck: 'updates:check',
   updatesDownload: 'updates:download',

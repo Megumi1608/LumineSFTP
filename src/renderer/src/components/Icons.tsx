@@ -25,6 +25,15 @@ function Icon({
   )
 }
 
+export function CopyIcon({ size }: { size?: number } = {}): ReactElement {
+  return (
+    <Icon size={size}>
+      <rect x="9" y="9" width="12" height="12" rx="2" />
+      <path d="M5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1" />
+    </Icon>
+  )
+}
+
 export function FolderIcon({ size }: { size?: number } = {}): ReactElement {
   return (
     <Icon size={size}>
@@ -210,15 +219,6 @@ export function InfoIcon(): ReactElement {
     <Icon>
       <circle cx="12" cy="12" r="9" />
       <path d="M12 11v5M12 8h.01" />
-    </Icon>
-  )
-}
-
-export function CopyIcon(): ReactElement {
-  return (
-    <Icon>
-      <rect x="9" y="9" width="11" height="11" rx="2" />
-      <path d="M15 9V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h3" />
     </Icon>
   )
 }

@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
-import { Transform } from 'node:stream'
+import { Transform, type Readable, type Writable } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 import { posix } from 'node:path'
 import { Client, type Algorithms, type FileEntryWithStats, type SFTPWrapper } from 'ssh2'
@@ -34,11 +34,15 @@ export interface KnownHostLookup {
   }): KnownHost
 }
 
+export type SessionHostKeyPrompt = Omit<HostKeyPrompt, 'sessionId'>
+export type SessionInteractiveRequest = Omit<InteractiveRequest, 'sessionId'>
+export type SessionHostKeyMismatch = Omit<HostKeyMismatchPrompt, 'sessionId'>
+
 export interface SessionEvents {
   status(status: ConnectionStatus): void
-  hostKey(prompt: HostKeyPrompt): void
-  hostKeyMismatch(prompt: HostKeyMismatchPrompt): void
-  interactive(request: InteractiveRequest): void
+  hostKey(prompt: SessionHostKeyPrompt): void
+  hostKeyMismatch(prompt: SessionHostKeyMismatch): void
+  interactive(request: SessionInteractiveRequest): void
   transfer(info: TransferInfo): void
 }
 
@@ -488,7 +492,73 @@ export class SftpSession {
       return leftDir - rightDir || left.name.localeCompare(right.name)
     })
 
-    return { path: resolved, entries: mapped }
+    const parent = posix.dirname(resolved)
+    return { path: resolved, entries: mapped, parent: parent === resolved ? null : parent }
+  }
+
+  /** Kiểu + kích thước cho bộ copy; không đi qua realpath vì đích đã tuyệt đối. */
+  async stat(target: string): Promise<{ kind: RemoteEntry['kind']; size: number }> {
+    const stats = await this.lstat(this.requirePath(target))
+    return {
+      kind: stats.isDirectory()
+        ? 'directory'
+        : stats.isFile()
+          ? 'file'
+          : stats.isSymbolicLink()
+            ? 'link'
+            : 'other',
+      size: stats.size
+    }
+  }
+
+  createReadStream(target: string): Readable {
+    return this.requireSftp().createReadStream(this.requirePath(target))
+  }
+
+  createWriteStream(target: string): {
+    stream: Writable
+    closed: Promise<void>
+  } {
+    const stream = this.requireSftp().createWriteStream(this.requirePath(target))
+    return { stream, closed: this.waitForClose(stream) }
+  }
+
+  /** `mkdir -p` phía server, dùng khi copy cả cây thư mục sang đích. */
+  async ensureDir(target: string): Promise<void> {
+    const resolved = this.requirePath(target)
+    const segments = resolved.split('/').filter(Boolean)
+    let current = ''
+    for (const segment of segments) {
+      current += `/${segment}`
+      try {
+        await doneCall((callback) => this.requireSftp().mkdir(current, callback))
+      } catch (error) {
+        const stats = await this.lstat(current).catch(() => null)
+        if (!stats || !stats.isDirectory()) throw error
+      }
+    }
+  }
+
+  async exists(target: string): Promise<boolean> {
+    try {
+      await this.lstat(this.requirePath(target))
+      return true
+    } catch {
+      return false
+    }
+  }
+
+  async renameAbsolute(from: string, to: string): Promise<void> {
+    const sftp = this.requireSftp()
+    await doneCall((callback) =>
+      sftp.rename(this.requirePath(from), this.requirePath(to), callback)
+    )
+  }
+
+  async removeQuietly(target: string): Promise<void> {
+    const sftp = this.sftp
+    if (!sftp) return
+    await this.unlinkIfExists(sftp, target)
   }
 
   async mkdir(directory: string, name: string): Promise<void> {

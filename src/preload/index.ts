@@ -6,6 +6,7 @@ import {
   type HostKeyMismatchPrompt,
   type HostKeyPrompt,
   type InteractiveRequest,
+  type Location,
   type LumineApi,
   type ProfileInput,
   type TransferInfo,
@@ -47,26 +48,60 @@ const api: LumineApi = {
       ipcRenderer.invoke(IPC.bookmarksAdd, profileId, path),
     remove: (id: string) => ipcRenderer.invoke(IPC.bookmarksRemove, id)
   },
-  connect: (profileId: string, secret: ConnectSecret) =>
-    ipcRenderer.invoke(IPC.connect, profileId, secret),
-  disconnect: () => ipcRenderer.invoke(IPC.disconnect),
-  respondHostKey: (requestId: string, accept: boolean) =>
-    ipcRenderer.invoke(IPC.hostKeyRespond, requestId, accept),
-  answerInteractive: (requestId: string, cancelled: boolean, answers: string[]) =>
-    ipcRenderer.invoke(IPC.interactiveAnswer, requestId, cancelled, answers),
+  connect: (profileId: string, secret: ConnectSecret, sessionId: string) =>
+    ipcRenderer.invoke(IPC.connect, profileId, secret, sessionId),
+  disconnect: (sessionId: string) => ipcRenderer.invoke(IPC.disconnect, sessionId),
+  respondHostKey: (sessionId: string, requestId: string, accept: boolean) =>
+    ipcRenderer.invoke(IPC.hostKeyRespond, sessionId, requestId, accept),
+  answerInteractive: (
+    sessionId: string,
+    requestId: string,
+    cancelled: boolean,
+    answers: string[]
+  ) =>
+    ipcRenderer.invoke(
+      IPC.interactiveAnswer,
+      sessionId,
+      requestId,
+      cancelled,
+      answers
+    ),
   sftp: {
-    list: (path: string) => ipcRenderer.invoke(IPC.sftpList, path),
-    mkdir: (dir: string, name: string) => ipcRenderer.invoke(IPC.sftpMkdir, dir, name),
-    rename: (dir: string, from: string, to: string) =>
-      ipcRenderer.invoke(IPC.sftpRename, dir, from, to),
-    remove: (paths: string[]) => ipcRenderer.invoke(IPC.sftpRemove, paths),
-    upload: (dir: string) => ipcRenderer.invoke(IPC.sftpUpload, dir),
-    uploadFolder: (dir: string) => ipcRenderer.invoke(IPC.sftpUploadFolder, dir),
-    download: (paths: string[]) => ipcRenderer.invoke(IPC.sftpDownload, paths),
-    cancel: (id: string) => ipcRenderer.invoke(IPC.sftpCancel, id),
+    list: (sessionId: string, path: string) =>
+      ipcRenderer.invoke(IPC.sftpList, sessionId, path),
+    mkdir: (sessionId: string, dir: string, name: string) =>
+      ipcRenderer.invoke(IPC.sftpMkdir, sessionId, dir, name),
+    rename: (sessionId: string, dir: string, from: string, to: string) =>
+      ipcRenderer.invoke(IPC.sftpRename, sessionId, dir, from, to),
+    remove: (sessionId: string, paths: string[]) =>
+      ipcRenderer.invoke(IPC.sftpRemove, sessionId, paths),
+    upload: (sessionId: string, dir: string) =>
+      ipcRenderer.invoke(IPC.sftpUpload, sessionId, dir),
+    uploadFolder: (sessionId: string, dir: string) =>
+      ipcRenderer.invoke(IPC.sftpUploadFolder, sessionId, dir),
+    download: (sessionId: string, paths: string[]) =>
+      ipcRenderer.invoke(IPC.sftpDownload, sessionId, paths),
+    open: (sessionId: string, path: string) =>
+      ipcRenderer.invoke(IPC.sftpOpen, sessionId, path),
     retry: (id: string) => ipcRenderer.invoke(IPC.sftpRetry, id),
     reveal: (id: string) => ipcRenderer.invoke(IPC.sftpReveal, id),
-    chmod: (path: string, mode: number) => ipcRenderer.invoke(IPC.sftpChmod, path, mode)
+    chmod: (sessionId: string, path: string, mode: number) =>
+      ipcRenderer.invoke(IPC.sftpChmod, sessionId, path, mode)
+  },
+  local: {
+    home: () => ipcRenderer.invoke(IPC.localHome),
+    list: (path: string) => ipcRenderer.invoke(IPC.localList, path),
+    mkdir: (dir: string, name: string) =>
+      ipcRenderer.invoke(IPC.localMkdir, dir, name),
+    rename: (dir: string, from: string, to: string) =>
+      ipcRenderer.invoke(IPC.localRename, dir, from, to),
+    remove: (path: string) => ipcRenderer.invoke(IPC.localRemove, path),
+    open: (path: string) => ipcRenderer.invoke(IPC.localOpen, path)
+  },
+  transfer: {
+    copy: (from: Location, to: Location) =>
+      ipcRenderer.invoke(IPC.transferCopy, from, to),
+    cancel: (id: string) => ipcRenderer.invoke(IPC.transferCancel, id)
   },
   updates: {
     get: () => ipcRenderer.invoke(IPC.updatesGet),

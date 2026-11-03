@@ -4,13 +4,16 @@ import os from 'node:os'
 import path from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import type {
-  HostKeyMismatchPrompt,
   KnownHost,
   Profile,
   TransferInfo
 } from '../src/shared/types'
 import { AppError } from '../src/main/errors'
-import { SftpSession, type SessionEvents } from '../src/main/ssh'
+import {
+  SftpSession,
+  type SessionEvents,
+  type SessionHostKeyMismatch
+} from '../src/main/ssh'
 
 const enabled = process.env.SFTP_IT === '1'
 const host = process.env.SFTP_HOST ?? '127.0.0.1'
@@ -28,7 +31,7 @@ interface Waiter {
 function makeHarness(profile: Profile) {
   const hosts = new Map<string, KnownHost>()
   const waiters: Waiter[] = []
-  const mismatches: HostKeyMismatchPrompt[] = []
+  const mismatches: SessionHostKeyMismatch[] = []
   let session: SftpSession
 
   const knownHosts = {

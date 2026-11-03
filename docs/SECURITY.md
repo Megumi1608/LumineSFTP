@@ -51,7 +51,7 @@ Ghi file theo kiểu atomic (`temp` + `rename`), tạo với `wx` để tránh g
 - Kết nối chỉ mở **SFTP subsystem**; không mở shell/exec, không agent forwarding, không port forwarding, không jump host.
 - Hỗ trợ **SSH private key** (OpenSSH/PEM). Key file được đọc trong main process; nội dung key không đi qua IPC/renderer. Passphrase được hỏi khi cần và chỉ lưu nếu người dùng bật OS vault.
 - Khi xoá profile hoặc đổi auth method/key path, secret đã lưu của profile đó bị xoá.
-- **Thuật toán hiện đại bắt buộc**: chỉ cho phép curve25519/ECDH/group14–18 SHA-256+, AES-GCM/CTR/ChaCha20-Poly1305, HMAC-SHA-2 (ưu tiên EtM), host key Ed25519/ECDSA/RSA-SHA-2. Từ chối `ssh-rsa` (SHA-1), `ssh-dss`, `hmac-sha1`, CBC, `group1-sha1`. Server chỉ hỗ trợ thuật toán cũ sẽ bị chặn với lỗi `ALGORITHM_UNSUPPORTED`.
+- **Thuật toán hiện đại bắt buộc**: chỉ cho phép curve25519/ECDH/group14–18 SHA-256+, AES-GCM/CTR, HMAC-SHA-2 (ưu tiên EtM), host key Ed25519/ECDSA/RSA-SHA-2. Từ chối `ssh-rsa` (SHA-1), `ssh-dss`, `hmac-sha1`, CBC, `group1-sha1`. Server chỉ hỗ trợ thuật toán cũ sẽ bị chặn với lỗi `ALGORITHM_UNSUPPORTED`.
 
 ### Lưu trữ known_hosts
 

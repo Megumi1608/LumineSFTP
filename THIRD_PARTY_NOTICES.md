@@ -24,6 +24,11 @@ Lumine SFTP sử dụng các thư viện sau. Giấy phép gốc thuộc về t�
 | Playwright Core | Apache-2.0 |
 | qrcode (chỉ tạo ảnh test) | MIT |
 
+## Fonts
+
+Geist Sans / Geist Mono — © Vercel, SIL Open Font License 1.1.
+Source: https://github.com/vercel/geist-font
+
 ## Brand assets
 
 LumineCloud cloud logo — © LumineCloud, used for the Lumine SFTP icon with permission.
